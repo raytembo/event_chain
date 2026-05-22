@@ -12,7 +12,8 @@ class EventLocationPickerScreen extends StatefulWidget {
   const EventLocationPickerScreen({super.key, this.initialLocation});
 
   @override
-  State<EventLocationPickerScreen> createState() => _EventLocationPickerScreenState();
+  State<EventLocationPickerScreen> createState() =>
+      _EventLocationPickerScreenState();
 }
 
 class _EventLocationPickerScreenState extends State<EventLocationPickerScreen> {
@@ -130,11 +131,11 @@ class _EventLocationPickerScreenState extends State<EventLocationPickerScreen> {
             child: Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: AppTheme.cardColor.withOpacity(0.95),
+                color: AppTheme.cardColor.withValues(alpha: 0.95),
                 borderRadius: BorderRadius.circular(12),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.3),
+                    color: Colors.black.withValues(alpha: 0.3),
                     blurRadius: 10,
                   ),
                 ],
@@ -147,7 +148,7 @@ class _EventLocationPickerScreenState extends State<EventLocationPickerScreen> {
                     child: Text(
                       _selectedLocation != null
                           ? '${_selectedLocation!.latitude.toStringAsFixed(6)}, '
-                          '${_selectedLocation!.longitude.toStringAsFixed(6)}'
+                              '${_selectedLocation!.longitude.toStringAsFixed(6)}'
                           : 'Tap anywhere on the map',
                       style: AppTheme.sans(fontSize: 13),
                     ),
@@ -167,13 +168,13 @@ class _EventLocationPickerScreenState extends State<EventLocationPickerScreen> {
               onPressed: _isLoadingLocation ? null : _getCurrentLocation,
               child: _isLoadingLocation
                   ? const SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.5,
-                  color: Colors.black,
-                ),
-              )
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        color: Colors.black,
+                      ),
+                    )
                   : const Icon(Icons.my_location),
             ),
           ),

@@ -35,7 +35,8 @@ class SettingsScreen extends ConsumerWidget {
           _SettingsCard(
             icon: Icons.person_outline_rounded,
             title: 'Profile',
-            subtitle: 'Edit your organizer name, contact details & business info',
+            subtitle:
+                'Edit your organizer name, contact details & business info',
             onTap: () {
               Navigator.push(
                 context,
@@ -49,7 +50,8 @@ class SettingsScreen extends ConsumerWidget {
           _SettingsCard(
             icon: Icons.attach_money_rounded,
             title: 'Payouts & Revenue',
-            subtitle: 'View ticket earnings, manage bank details & withdrawal requests',
+            subtitle:
+                'View ticket earnings, manage bank details & withdrawal requests',
             onTap: () {
               // TODO: future owner payout screen
               ScaffoldMessenger.of(context).showSnackBar(
@@ -63,11 +65,13 @@ class SettingsScreen extends ConsumerWidget {
           _SettingsCard(
             icon: Icons.notifications_outlined,
             title: 'Notifications',
-            subtitle: 'Manage alerts for new ticket sales, scans & event updates',
+            subtitle:
+                'Manage alerts for new ticket sales, scans & event updates',
             onTap: () {
               // TODO: future owner notification preferences
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Notification preferences coming soon')),
+                const SnackBar(
+                    content: Text('Notification preferences coming soon')),
               );
             },
           ),
@@ -139,7 +143,7 @@ class _SettingsCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: AppTheme.primaryColor.withOpacity(0.1),
+                  color: AppTheme.primaryColor.withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(icon, color: AppTheme.primaryColor, size: 28),
@@ -151,7 +155,8 @@ class _SettingsCard extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: AppTheme.merri(fontSize: 17, fontWeight: FontWeight.w600),
+                      style: AppTheme.merri(
+                          fontSize: 17, fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -164,7 +169,7 @@ class _SettingsCard extends StatelessWidget {
                   ],
                 ),
               ),
-              Icon(
+              const Icon(
                 Icons.chevron_right_rounded,
                 color: AppTheme.subTextColor,
                 size: 24,

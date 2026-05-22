@@ -4,11 +4,9 @@
 
 import 'dart:async';
 import 'dart:ffi';
-import 'dart:io';
 import 'dart:convert';
 
 import 'package:ffi/ffi.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'eventchain_bindings.dart';
 import '../models/ticket_model.dart';
@@ -121,8 +119,8 @@ class EventChainFFI {
     final enPtr = eventName.toNativeUtf8();
     final noPtr = newOwnerName.toNativeUtf8();
     final idPtr = newOwnerID.toNativeUtf8();
-    final r = _bindings.transferOwnership(
-        _handle, enPtr, blockIndex, noPtr, idPtr);
+    final r =
+        _bindings.transferOwnership(_handle, enPtr, blockIndex, noPtr, idPtr);
     calloc.free(enPtr);
     calloc.free(noPtr);
     calloc.free(idPtr);
@@ -179,9 +177,9 @@ class EventChainFFI {
     int height = 512,
   }) async {
     assert(
-    outputPath.endsWith('.png') || outputPath.endsWith('.bmp'),
-    'generateCover: outputPath must end in .png or .bmp — '
-        'lossy formats are rejected by the C++ layer.',
+      outputPath.endsWith('.png') || outputPath.endsWith('.bmp'),
+      'generateCover: outputPath must end in .png or .bmp — '
+      'lossy formats are rejected by the C++ layer.',
     );
     final ptr = outputPath.toNativeUtf8();
     final r = _bindings.generateCover(ptr, width, height);
@@ -203,9 +201,9 @@ class EventChainFFI {
     required String stegoPath,
   }) async {
     assert(
-    stegoPath.endsWith('.png') || stegoPath.endsWith('.bmp'),
-    'embedTicket: stegoPath must end in .png or .bmp — '
-        'lossy formats are rejected by the C++ layer.',
+      stegoPath.endsWith('.png') || stegoPath.endsWith('.bmp'),
+      'embedTicket: stegoPath must end in .png or .bmp — '
+      'lossy formats are rejected by the C++ layer.',
     );
     final enPtr = eventName.toNativeUtf8();
     final cpPtr = coverPath.toNativeUtf8();
@@ -234,8 +232,7 @@ class EventChainFFI {
     return r == 1;
   }
 
-  int stegoCapacity(int width, int height) =>
-      _bindings.capacity(width, height);
+  int stegoCapacity(int width, int height) => _bindings.capacity(width, height);
 
   // ── Utility ───────────────────────────────────────────────────────────────
 

@@ -110,7 +110,7 @@ class _SettingsCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: AppTheme.primaryColor.withOpacity(0.1),
+                  color: AppTheme.primaryColor.withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(icon, color: AppTheme.primaryColor, size: 28),
@@ -122,7 +122,8 @@ class _SettingsCard extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: AppTheme.merri(fontSize: 17, fontWeight: FontWeight.w600),
+                      style: AppTheme.merri(
+                          fontSize: 17, fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -135,7 +136,7 @@ class _SettingsCard extends StatelessWidget {
                   ],
                 ),
               ),
-              Icon(
+              const Icon(
                 Icons.chevron_right_rounded,
                 color: AppTheme.subTextColor,
                 size: 24,

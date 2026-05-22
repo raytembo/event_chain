@@ -2,7 +2,6 @@
 //
 // Dart mirror of the C++ EventTicket struct.
 // Travels across the FFI boundary as JSON.
-
 class TicketModel {
   final String ticketID;
   final String eventName;
@@ -25,25 +24,25 @@ class TicketModel {
   });
 
   factory TicketModel.fromJson(Map<String, dynamic> json) => TicketModel(
-        ticketID:   json['ticketID']   as String? ?? '',
-        eventName:  json['eventName']  as String? ?? '',
-        eventDate:  json['eventDate']  as String? ?? '',
-        venue:      json['venue']      as String? ?? '',
-        ownerName:  json['ownerName']  as String? ?? '',
-        ownerID:    json['ownerID']    as String? ?? '',
+        ticketID: json['ticketID'] as String? ?? '',
+        eventName: json['eventName'] as String? ?? '',
+        eventDate: json['eventDate'] as String? ?? '',
+        venue: json['venue'] as String? ?? '',
+        ownerName: json['ownerName'] as String? ?? '',
+        ownerID: json['ownerID'] as String? ?? '',
         ticketType: json['ticketType'] as String? ?? 'General',
-        price:      (json['price']     as num? ?? 0).toDouble(),
+        price: (json['price'] as num? ?? 0).toDouble(),
       );
 
   Map<String, dynamic> toJson() => {
-        'ticketID':   ticketID,
-        'eventName':  eventName,
-        'eventDate':  eventDate,
-        'venue':      venue,
-        'ownerName':  ownerName,
-        'ownerID':    ownerID,
+        'ticketID': ticketID,
+        'eventName': eventName,
+        'eventDate': eventDate,
+        'venue': venue,
+        'ownerName': ownerName,
+        'ownerID': ownerID,
         'ticketType': ticketType,
-        'price':      price,
+        'price': price,
       };
 
   TicketModel copyWith({
@@ -57,14 +56,14 @@ class TicketModel {
     double? price,
   }) =>
       TicketModel(
-        ticketID:   ticketID   ?? this.ticketID,
-        eventName:  eventName  ?? this.eventName,
-        eventDate:  eventDate  ?? this.eventDate,
-        venue:      venue      ?? this.venue,
-        ownerName:  ownerName  ?? this.ownerName,
-        ownerID:    ownerID    ?? this.ownerID,
+        ticketID: ticketID ?? this.ticketID,
+        eventName: eventName ?? this.eventName,
+        eventDate: eventDate ?? this.eventDate,
+        venue: venue ?? this.venue,
+        ownerName: ownerName ?? this.ownerName,
+        ownerID: ownerID ?? this.ownerID,
         ticketType: ticketType ?? this.ticketType,
-        price:      price      ?? this.price,
+        price: price ?? this.price,
       );
 
   @override
@@ -72,15 +71,24 @@ class TicketModel {
       'TicketModel(id=$ticketID, event=$eventName, owner=$ownerName)';
 }
 
-/// Mirrors the block wrapper returned by eventchain_get_chain_json
+/// Mirrors the block wrapper returned by eventchain_get_chain_json.
 class BlockModel {
   final int index;
   final TicketModel ticket;
 
   const BlockModel({required this.index, required this.ticket});
 
+  /// 1-based index used for Supabase Storage paths (ticket_1, ticket_2, …).
+  ///
+  /// C++ chain indices are 0-based; storage paths are 1-based because block 0
+  /// is the genesis block (no ticket) and the first real ticket lands at
+  /// block 1 → uploaded as ticket_1.png.  Always use this getter when
+  /// constructing or resolving storage paths — never add 1 manually at call
+  /// sites.
+  int get storageIndex => index + 1;
+
   factory BlockModel.fromJson(Map<String, dynamic> json) => BlockModel(
-        index:  json['index'] as int,
+        index: json['index'] as int,
         ticket: TicketModel.fromJson(json['ticket'] as Map<String, dynamic>),
       );
 }

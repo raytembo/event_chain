@@ -1,13 +1,3 @@
-// lib/main.dart
-//
-// Entry point. Initialises:
-//   1. Supabase (auth + profiles)
-//   2. EventChainFFI (native C++ blockchain)
-// Then routes:
-//   • Not logged in      → LoginScreen
-//   • UserRole.owner     → OwnerRootScaffold
-//   • UserRole.customer  → CustomerRootScaffold
-
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,14 +15,12 @@ import 'features/customer/customer_root_scaffold.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 1. Initialise Supabase (replaces Isar)
   await SupabaseService.init(
     url: 'https://oiqjukecidjjyvskgacs.supabase.co',
     anonKey: 'sb_publishable_bxVDb-O1-ME-tkM3w05MQg_QodsVeOR',
   );
 
-  // 2. Initialise native blockchain library
-  final docsDir      = await getApplicationDocumentsDirectory();
+  final docsDir = await getApplicationDocumentsDirectory();
   final eventsFolder = Directory('${docsDir.path}/events');
   if (!eventsFolder.existsSync()) eventsFolder.createSync(recursive: true);
   await EventChainFFI.instance.init(eventsFolder.path);
@@ -40,24 +28,31 @@ Future<void> main() async {
   runApp(const ProviderScope(child: EventChainApp()));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-class EventChainApp extends StatelessWidget {
+class EventChainApp extends StatefulWidget {
   const EventChainApp({super.key});
+
+  @override
+  State<EventChainApp> createState() => _EventChainAppState();
+}
+
+class _EventChainAppState extends State<EventChainApp> {
+  @override
+  void dispose() {
+    EventChainFFI.instance.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title:                     'EventChain',
+      title: 'EventChain',
       debugShowCheckedModeBanner: false,
-      theme:                     AppTheme.dark(),
-      home:                      const _AuthRouter(),
+      theme: AppTheme.dark(),
+      home: const _AuthRouter(),
     );
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Watches authProvider and rebuilds the root widget when auth state changes.
-// ─────────────────────────────────────────────────────────────────────────────
 class _AuthRouter extends ConsumerWidget {
   const _AuthRouter();
 
@@ -70,7 +65,7 @@ class _AuthRouter extends ConsumerWidget {
       return const Scaffold(
         backgroundColor: Color(0xFF0D1117),
         body: Center(
-          child: CircularProgressIndicator(color: Color(0xFF00E5FF)),
+          child: CircularProgressIndicator(color: AppTheme.primaryColor),
         ),
       );
     }
@@ -79,9 +74,9 @@ class _AuthRouter extends ConsumerWidget {
 
     // Switch on the concrete UserRole value — null case handled above.
     return switch (auth.role) {
-      UserRole.owner    => const OwnerRootScaffold(),
+      UserRole.owner => const OwnerRootScaffold(),
       UserRole.customer => const CustomerRootScaffold(),
-      _                 => const LoginScreen(),   // covers null + future roles
+      _ => const LoginScreen(), // covers null + future roles
     };
   }
 }

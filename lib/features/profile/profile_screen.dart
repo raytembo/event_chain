@@ -263,7 +263,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               const SizedBox(height: 40),
 
               // ── Form Fields ───────────────────────────────────────
-              _Label('Display Name'),
+              const _Label('Display Name'),
               const SizedBox(height: 8),
               TextFormField(
                 controller: _displayNameCtrl,
@@ -287,7 +287,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
               const SizedBox(height: 24),
 
-              _Label('Phone Number'),
+              const _Label('Phone Number'),
               const SizedBox(height: 8),
               TextFormField(
                 controller: _phoneCtrl,
@@ -306,7 +306,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
               const SizedBox(height: 24),
 
-              _Label('Bio (optional)'),
+              const _Label('Bio (optional)'),
               const SizedBox(height: 8),
               TextFormField(
                 controller: _bioCtrl,
@@ -327,7 +327,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               const SizedBox(height: 32),
 
               // ── Read-only fields ───────────────────────────────────
-              _Label('Email Address'),
+              const _Label('Email Address'),
               const SizedBox(height: 8),
               Container(
                 width: double.infinity,
@@ -344,7 +344,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
               const SizedBox(height: 24),
 
-              _Label('Account Role'),
+              const _Label('Account Role'),
               const SizedBox(height: 8),
               Container(
                 width: double.infinity,

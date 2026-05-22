@@ -16,8 +16,7 @@ class EventCard extends StatelessWidget {
   String get _date => _formatDate(event['event_date']);
   String get _venue => event['venue'] as String? ?? '';
   String get _desc => event['description'] as String? ?? '';
-  String get _ownerName =>
-      (event['owner']?['display_name'] as String?) ?? '';
+  String get _ownerName => (event['owner']?['display_name'] as String?) ?? '';
   String get _eventId => event['id'] as String;
 
   List<Map<String, dynamic>> get _ticketTypes =>
@@ -25,12 +24,11 @@ class EventCard extends StatelessWidget {
 
   bool get _isSoldOut =>
       _ticketTypes.isNotEmpty &&
-          _ticketTypes
-              .every((t) => (t['quantity_available'] as int? ?? 0) <= 0);
+      _ticketTypes.every((t) => (t['quantity_available'] as int? ?? 0) <= 0);
 
   double? get _minPrice {
-    final available = _ticketTypes
-        .where((t) => (t['quantity_available'] as int? ?? 0) > 0);
+    final available =
+        _ticketTypes.where((t) => (t['quantity_available'] as int? ?? 0) > 0);
     if (available.isEmpty) return null;
     return available
         .map((t) => (t['price'] as num).toDouble())
@@ -49,10 +47,20 @@ class EventCard extends StatelessWidget {
   }
 
   static String _monthName(int m) => const [
-    '',
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-  ][m];
+        '',
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec'
+      ][m];
 
   // ── Build ─────────────────────────────────────────────────────────────────
 
@@ -77,14 +85,14 @@ class EventCard extends StatelessWidget {
       children: [
         _posterUrl.isNotEmpty
             ? Image.network(
-          _posterUrl,
-          height: 200,
-          width: double.infinity,
-          fit: BoxFit.cover,
-          color: _isSoldOut ? Colors.black45 : null,
-          colorBlendMode: _isSoldOut ? BlendMode.darken : null,
-          errorBuilder: (_, __, ___) => const _PosterPlaceholder(),
-        )
+                _posterUrl,
+                height: 200,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                color: _isSoldOut ? Colors.black45 : null,
+                colorBlendMode: _isSoldOut ? BlendMode.darken : null,
+                errorBuilder: (_, __, ___) => const _PosterPlaceholder(),
+              )
             : const _PosterPlaceholder(),
         _buildPosterGradient(),
         if (_isSoldOut) _buildSoldOutOverlay() else _buildPriceBadge(),
@@ -93,41 +101,41 @@ class EventCard extends StatelessWidget {
   }
 
   Widget _buildPosterGradient() => Positioned(
-    left: 0,
-    right: 0,
-    bottom: 0,
-    child: Container(
-      height: 80,
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Colors.transparent, Color(0xCC1A1A1A)],
-        ),
-      ),
-    ),
-  );
-
-  Widget _buildSoldOutOverlay() => Positioned.fill(
-    child: Center(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        decoration: BoxDecoration(
-          color: AppTheme.tamperedColor,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Text(
-          'SOLD OUT',
-          style: AppTheme.sans(
-            fontSize: 22,
-            fontWeight: FontWeight.w900,
-            color: Colors.white,
-            letterSpacing: 2,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        child: Container(
+          height: 80,
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Colors.transparent, Color(0xCC1A1A1A)],
+            ),
           ),
         ),
-      ),
-    ),
-  );
+      );
+
+  Widget _buildSoldOutOverlay() => Positioned.fill(
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppTheme.tamperedColor,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              'SOLD OUT',
+              style: AppTheme.sans(
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
+                color: Colors.white,
+                letterSpacing: 2,
+              ),
+            ),
+          ),
+        ),
+      );
 
   Widget _buildPriceBadge() {
     if (_minPrice == null) return const SizedBox.shrink();
@@ -163,8 +171,7 @@ class EventCard extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               'by $_ownerName',
-              style:
-              AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor),
+              style: AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor),
             ),
           ],
           const SizedBox(height: 12),
@@ -173,8 +180,7 @@ class EventCard extends StatelessWidget {
             const SizedBox(height: 10),
             Text(
               _desc,
-              style:
-              AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
+              style: AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
             ),
@@ -183,37 +189,37 @@ class EventCard extends StatelessWidget {
           _isSoldOut
               ? const _SoldOutBanner()
               : TicketSection(
-            eventId: _eventId,
-            eventName: _name,
-            eventDate: _date,
-            venue: _venue,
-            ticketTypes: _ticketTypes,
-          ),
+                  eventId: _eventId,
+                  eventName: _name,
+                  eventDate: _date,
+                  venue: _venue,
+                  ticketTypes: _ticketTypes,
+                ),
         ],
       ),
     );
   }
 
   Widget _buildMetaRow() => Row(
-    children: [
-      const Icon(Icons.calendar_today_rounded,
-          size: 13, color: AppTheme.subTextColor),
-      const SizedBox(width: 5),
-      Text(_date,
-          style: AppTheme.sans(fontSize: 13, color: Colors.white70)),
-      const SizedBox(width: 16),
-      const Icon(Icons.location_on_outlined,
-          size: 13, color: AppTheme.subTextColor),
-      const SizedBox(width: 4),
-      Expanded(
-        child: Text(
-          _venue,
-          style: AppTheme.sans(fontSize: 13, color: Colors.white70),
-          overflow: TextOverflow.ellipsis,
-        ),
-      ),
-    ],
-  );
+        children: [
+          const Icon(Icons.calendar_today_rounded,
+              size: 13, color: AppTheme.subTextColor),
+          const SizedBox(width: 5),
+          Text(_date,
+              style: AppTheme.sans(fontSize: 13, color: Colors.white70)),
+          const SizedBox(width: 16),
+          const Icon(Icons.location_on_outlined,
+              size: 13, color: AppTheme.subTextColor),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              _venue,
+              style: AppTheme.sans(fontSize: 13, color: Colors.white70),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      );
 }
 
 // ── Private sub-widgets ──────────────────────────────────────────────────────
@@ -223,14 +229,13 @@ class _PosterPlaceholder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    height: 200,
-    width: double.infinity,
-    color: const Color(0xFF252525),
-    child: const Center(
-      child:
-      Icon(Icons.event_rounded, color: Color(0xFF3A3A3A), size: 48),
-    ),
-  );
+        height: 200,
+        width: double.infinity,
+        color: const Color(0xFF252525),
+        child: const Center(
+          child: Icon(Icons.event_rounded, color: Color(0xFF3A3A3A), size: 48),
+        ),
+      );
 }
 
 class _SoldOutBanner extends StatelessWidget {
@@ -238,29 +243,29 @@ class _SoldOutBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: AppTheme.tamperedColor.withOpacity(0.08),
-      borderRadius: BorderRadius.circular(12),
-      border:
-      Border.all(color: AppTheme.tamperedColor.withOpacity(0.3)),
-    ),
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const Icon(Icons.block_rounded,
-            color: AppTheme.tamperedColor, size: 18),
-        const SizedBox(width: 10),
-        Text(
-          'All tickets sold out',
-          style: AppTheme.sans(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: AppTheme.tamperedColor,
-          ),
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppTheme.tamperedColor.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border:
+              Border.all(color: AppTheme.tamperedColor.withValues(alpha: 0.3)),
         ),
-      ],
-    ),
-  );
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.block_rounded,
+                color: AppTheme.tamperedColor, size: 18),
+            const SizedBox(width: 10),
+            Text(
+              'All tickets sold out',
+              style: AppTheme.sans(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.tamperedColor,
+              ),
+            ),
+          ],
+        ),
+      );
 }

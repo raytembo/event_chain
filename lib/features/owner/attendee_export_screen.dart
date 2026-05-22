@@ -5,13 +5,12 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../core/ffi_bridge/eventchain_ffi.dart';
 import '../../core/models/ticket_model.dart';
 import '../events/events_provider.dart';
-import '../../shared/theme/app_theme.dart';   // ← Updated import to use shared AppTheme
+import '../../shared/theme/app_theme.dart'; // ← Updated import to use shared AppTheme
 
 class AttendeeExportScreen extends ConsumerStatefulWidget {
   const AttendeeExportScreen({super.key});
@@ -29,9 +28,7 @@ class _AttendeeExportScreenState extends ConsumerState<AttendeeExportScreen> {
     final notifier = ref.read(eventsProvider.notifier);
     setState(() {
       _selectedEvent = eventName;
-      _blocks = notifier.getChain(eventName)
-          .where((b) => b.index > 0)
-          .toList();
+      _blocks = notifier.getChain(eventName).where((b) => b.index > 0).toList();
     });
   }
 
@@ -42,19 +39,20 @@ class _AttendeeExportScreenState extends ConsumerState<AttendeeExportScreen> {
 
     final buf = StringBuffer();
     // Header
-    buf.writeln('Block,TicketID,EventName,EventDate,Venue,OwnerName,OwnerID,TicketType,Price');
+    buf.writeln(
+        'Block,TicketID,EventName,EventDate,Venue,OwnerName,OwnerID,TicketType,Price');
     for (final b in _blocks) {
       final t = b.ticket;
       buf.writeln(
         '${b.index},'
-            '"${t.ticketID}",'
-            '"${t.eventName}",'
-            '"${t.eventDate}",'
-            '"${t.venue}",'
-            '"${t.ownerName}",'
-            '"${t.ownerID}",'
-            '"${t.ticketType}",'
-            '${t.price.toStringAsFixed(2)}',
+        '"${t.ticketID}",'
+        '"${t.eventName}",'
+        '"${t.eventDate}",'
+        '"${t.venue}",'
+        '"${t.ownerName}",'
+        '"${t.ownerID}",'
+        '"${t.ticketType}",'
+        '${t.price.toStringAsFixed(2)}',
       );
     }
 
@@ -77,9 +75,9 @@ class _AttendeeExportScreenState extends ConsumerState<AttendeeExportScreen> {
     ref.watch(eventsProvider);
     final eventNames = EventChainFFI.instance.listEvents();
 
-    final accent = AppTheme.primaryColor;
-    final card = AppTheme.cardColor;
-    final bg = const Color(0xFF0A0A0A); // matches AppTheme _surface
+    const accent = AppTheme.primaryColor;
+    const card = AppTheme.cardColor;
+    const bg = Color(0xFF0A0A0A); // matches AppTheme _surface
 
     return Scaffold(
       backgroundColor: bg,
@@ -99,21 +97,22 @@ class _AttendeeExportScreenState extends ConsumerState<AttendeeExportScreen> {
               padding: const EdgeInsets.only(right: 8),
               child: _exporting
                   ? const Padding(
-                padding: EdgeInsets.all(14),
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    color: Color(0xFF00C853),
-                    strokeWidth: 2,
-                  ),
-                ),
-              )
+                      padding: EdgeInsets.all(14),
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          color: Color(0xFF00C853),
+                          strokeWidth: 2,
+                        ),
+                      ),
+                    )
                   : IconButton(
-                tooltip: 'Export CSV',
-                icon: const Icon(Icons.download, color: Color(0xFF00C853)),
-                onPressed: _exportCsv,
-              ),
+                      tooltip: 'Export CSV',
+                      icon:
+                          const Icon(Icons.download, color: Color(0xFF00C853)),
+                      onPressed: _exportCsv,
+                    ),
             ),
         ],
       ),
@@ -123,7 +122,7 @@ class _AttendeeExportScreenState extends ConsumerState<AttendeeExportScreen> {
           Padding(
             padding: const EdgeInsets.all(16),
             child: DropdownButtonFormField<String>(
-              value: _selectedEvent,
+              initialValue: _selectedEvent,
               isExpanded: true,
               dropdownColor: card,
               style: AppTheme.sans(color: Colors.white, fontSize: 13),
@@ -138,15 +137,15 @@ class _AttendeeExportScreenState extends ConsumerState<AttendeeExportScreen> {
                 fillColor: AppTheme.cardMidColor,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(color: accent.withOpacity(0.3)),
+                  borderSide: BorderSide(color: accent.withValues(alpha: 0.3)),
                 ),
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(color: accent.withOpacity(0.2)),
+                  borderSide: BorderSide(color: accent.withValues(alpha: 0.2)),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(color: accent, width: 1.5),
+                  borderSide: const BorderSide(color: accent, width: 1.5),
                 ),
               ),
               hint: Text(
@@ -176,7 +175,7 @@ class _AttendeeExportScreenState extends ConsumerState<AttendeeExportScreen> {
                   _StatChip(
                     label: 'TOTAL REVENUE',
                     value:
-                    '\$${_blocks.fold(0.0, (s, b) => s + b.ticket.price).toStringAsFixed(2)}',
+                        '\$${_blocks.fold(0.0, (s, b) => s + b.ticket.price).toStringAsFixed(2)}',
                     color: AppTheme.primaryColor,
                   ),
                 ],
@@ -189,37 +188,37 @@ class _AttendeeExportScreenState extends ConsumerState<AttendeeExportScreen> {
           Expanded(
             child: _blocks.isEmpty
                 ? Center(
-              child: Text(
-                _selectedEvent == null
-                    ? 'Select an event above'
-                    : 'No tickets found for this event.',
-                style: AppTheme.sans(
-                  color: AppTheme.subTextColor,
-                  fontSize: 13,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            )
+                    child: Text(
+                      _selectedEvent == null
+                          ? 'Select an event above'
+                          : 'No tickets found for this event.',
+                      style: AppTheme.sans(
+                        color: AppTheme.subTextColor,
+                        fontSize: 13,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  )
                 : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: _blocks.length,
-              itemBuilder: (context, i) =>
-                  _AttendeeRow(block: _blocks[i], index: i + 1),
-            ),
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _blocks.length,
+                    itemBuilder: (context, i) =>
+                        _AttendeeRow(block: _blocks[i], index: i + 1),
+                  ),
           ),
         ],
       ),
       floatingActionButton: _blocks.isNotEmpty
           ? FloatingActionButton.extended(
-        backgroundColor: AppTheme.primaryColor,
-        foregroundColor: Colors.black,
-        onPressed: _exporting ? null : _exportCsv,
-        icon: const Icon(Icons.download),
-        label: Text(
-          'EXPORT CSV',
-          style: AppTheme.sans(fontWeight: FontWeight.bold),
-        ),
-      )
+              backgroundColor: AppTheme.primaryColor,
+              foregroundColor: Colors.black,
+              onPressed: _exporting ? null : _exportCsv,
+              icon: const Icon(Icons.download),
+              label: Text(
+                'EXPORT CSV',
+                style: AppTheme.sans(fontWeight: FontWeight.bold),
+              ),
+            )
           : null,
     );
   }
@@ -243,7 +242,7 @@ class _AttendeeRow extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppTheme.cardColor,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: typeColor.withOpacity(0.3)),
+        border: Border.all(color: typeColor.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
@@ -253,7 +252,7 @@ class _AttendeeRow extends StatelessWidget {
             height: 32,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: AppTheme.primaryColor.withOpacity(0.08),
+              color: AppTheme.primaryColor.withValues(alpha: 0.08),
             ),
             alignment: Alignment.center,
             child: Text(
@@ -346,7 +345,7 @@ class _StatChip extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppTheme.cardColor,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.4)),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
       child: Column(
         children: [

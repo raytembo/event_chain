@@ -14,7 +14,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../shared/theme/app_theme.dart';
 
 // ── Provider ──────────────────────────────────────────────────────────────────
-final myTicketsProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
+final myTicketsProvider =
+    FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
   final supabase = Supabase.instance.client;
   final userId = supabase.auth.currentUser?.id;
   if (userId == null) return [];
@@ -23,7 +24,7 @@ final myTicketsProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>
       .from('payments')
       .select('*, tickets(*)')
       .eq('buyer_id', userId)
-      .eq('status', 'completed')           // only verified successful purchases
+      .eq('status', 'completed') // only verified successful purchases
       .order('created_at', ascending: false);
 
   return List<Map<String, dynamic>>.from(res);
@@ -69,10 +70,10 @@ class WalletScreen extends ConsumerWidget {
         data: (payments) => payments.isEmpty
             ? const _EmptyState()
             : ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: payments.length,
-          itemBuilder: (ctx, i) => _WalletCard(payment: payments[i]),
-        ),
+                padding: const EdgeInsets.all(16),
+                itemCount: payments.length,
+                itemBuilder: (ctx, i) => _WalletCard(payment: payments[i]),
+              ),
       ),
     );
   }
@@ -80,9 +81,10 @@ class WalletScreen extends ConsumerWidget {
 
 // ─────────────────────────────────────────────────────────────────────────────
 class _WalletCard extends StatelessWidget {
-  final Map<String, dynamic> payment;   // each item is a payment row with embedded ticket
+  final Map<String, dynamic>
+      payment; // each item is a payment row with embedded ticket
 
-  const _WalletCard({required this.payment, super.key});
+  const _WalletCard({required this.payment});
 
   static String _formatDate(dynamic raw) {
     if (raw == null) return '';
@@ -96,20 +98,20 @@ class _WalletCard extends StatelessWidget {
   }
 
   static String _month(int m) => const [
-    '',
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec'
-  ][m];
+        '',
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec'
+      ][m];
 
   Color _typeColor(String type) {
     switch (type.toLowerCase()) {
@@ -147,12 +149,12 @@ class _WalletCard extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            typeColor.withOpacity(0.22),
+            typeColor.withValues(alpha: 0.22),
             AppTheme.cardColor,
           ],
         ),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: typeColor.withOpacity(0.5)),
+        border: Border.all(color: typeColor.withValues(alpha: 0.5)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -163,11 +165,12 @@ class _WalletCard extends StatelessWidget {
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                   decoration: BoxDecoration(
-                    color: typeColor.withOpacity(0.15),
+                    color: typeColor.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: typeColor.withOpacity(0.4)),
+                    border: Border.all(color: typeColor.withValues(alpha: 0.4)),
                   ),
                   child: Text(
                     ticketType,
@@ -196,10 +199,10 @@ class _WalletCard extends StatelessWidget {
             Row(
               children: List.generate(
                 32,
-                    (_) => Expanded(
+                (_) => Expanded(
                   child: Container(
                     height: 1.5,
-                    color: Colors.white.withOpacity(0.15),
+                    color: Colors.white.withValues(alpha: 0.15),
                     margin: const EdgeInsets.symmetric(horizontal: 1.5),
                   ),
                 ),
@@ -259,7 +262,8 @@ class _WalletCard extends StatelessWidget {
                 const SizedBox(width: 6),
                 Text(
                   ownerName,
-                  style: AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
+                  style:
+                      AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
                 ),
               ],
             ),
@@ -303,7 +307,7 @@ class _WalletCard extends StatelessWidget {
 
 // ─────────────────────────────────────────────────────────────────────────────
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({super.key});
+  const _EmptyState();
 
   @override
   Widget build(BuildContext context) {
@@ -314,7 +318,7 @@ class _EmptyState extends StatelessWidget {
           Icon(
             Icons.confirmation_number_outlined,
             size: 88,
-            color: AppTheme.primaryColor.withOpacity(0.25),
+            color: AppTheme.primaryColor.withValues(alpha: 0.25),
           ),
           const SizedBox(height: 24),
           Text(

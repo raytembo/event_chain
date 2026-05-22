@@ -115,7 +115,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     final String persistentPath;
     try {
       final src = File(sourcePath);
-      if (!await src.exists()) throw const ImageReadError('Source image no longer exists');
+      if (!await src.exists())
+        throw const ImageReadError('Source image no longer exists');
       persistentPath = '${tempDir.path}/scan_orig_$ts.$ext';
       await src.copy(persistentPath);
     } on ScanError {
@@ -129,10 +130,12 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     try {
       final fileBytes = await File(persistentPath).length();
       if (fileBytes < 1024) {
-        throw ImageReadError('Image too small (${fileBytes}B) — likely corrupt');
+        throw ImageReadError(
+            'Image too small (${fileBytes}B) — likely corrupt');
       }
 
-      debugPrint('[Scanner] Image ready: $persistentPath (${(fileBytes / 1024).toStringAsFixed(1)} KB)');
+      debugPrint(
+          '[Scanner] Image ready: $persistentPath (${(fileBytes / 1024).toStringAsFixed(1)} KB)');
 
       // Ensure chains are loaded
       final ffi = EventChainFFI.instance;
@@ -150,9 +153,12 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       // Supabase cross-check
       Map<String, dynamic>? dbData;
-      if (result.verified && result.eventName != null && result.blockIndex != null) {
+      if (result.verified &&
+          result.eventName != null &&
+          result.blockIndex != null) {
         _setStatus('Loading ticket details…');
-        dbData = await _supabaseLookupByBlock(result.eventName!, result.blockIndex!);
+        dbData =
+            await _supabaseLookupByBlock(result.eventName!, result.blockIndex!);
       } else {
         _setStatus('Checking ticket database…');
         dbData = await _supabaseLookupByImageHash(persistentPath);
@@ -190,10 +196,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
   // ── Verification loop ─────────────────────────────────────────────────
   Future<_ScanResult> _runVerification(
-      EventChainFFI ffi,
-      List<String> eventNames,
-      String imagePath,
-      ) async {
+    EventChainFFI ffi,
+    List<String> eventNames,
+    String imagePath,
+  ) async {
     for (final eventName in eventNames) {
       if (!mounted) break;
 
@@ -213,7 +219,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           );
           if (ok) {
             debugPrint('[Scanner] MATCH → $eventName block $i');
-            return _ScanResult(verified: true, eventName: eventName, blockIndex: i);
+            return _ScanResult(
+                verified: true, eventName: eventName, blockIndex: i);
           }
         } catch (e, stack) {
           debugPrint('[Scanner] block $i error (skipping): $e\n$stack');
@@ -228,10 +235,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   Future<List<String>> _tryDownloadChains() async {
     try {
       final supabase = Supabase.instance.client;
-      final rows = await supabase
-          .from('events')
-          .select('id, event_name')
-          .limit(50);
+      final rows =
+          await supabase.from('events').select('id, event_name').limit(50);
 
       final notifier = ref.read(eventsProvider.notifier);
       final events = List<Map<String, dynamic>>.from(rows);
@@ -253,15 +258,15 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   }
 
   List<List<T>> _chunk<T>(List<T> list, int size) => [
-    for (int i = 0; i < list.length; i += size)
-      list.sublist(i, (i + size < list.length) ? i + size : list.length),
-  ];
+        for (int i = 0; i < list.length; i += size)
+          list.sublist(i, (i + size < list.length) ? i + size : list.length),
+      ];
 
   // ── Supabase lookups ──────────────────────────────────────────────────
   Future<Map<String, dynamic>?> _supabaseLookupByBlock(
-      String eventName,
-      int blockIndex,
-      ) async {
+    String eventName,
+    int blockIndex,
+  ) async {
     try {
       return await Supabase.instance.client
           .from('tickets')
@@ -276,7 +281,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   }
 
   /// Fallback: perceptual hash lookup (not yet implemented).
-  Future<Map<String, dynamic>?> _supabaseLookupByImageHash(String imagePath) async {
+  Future<Map<String, dynamic>?> _supabaseLookupByImageHash(
+      String imagePath) async {
     // TODO: implement ImageHasher.perceptualHash(imagePath)
     return null;
   }
@@ -339,7 +345,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                 _statusMessage,
                 key: ValueKey(_statusMessage),
                 textAlign: TextAlign.center,
-                style: AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
+                style:
+                    AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
               ),
             ),
           ],
@@ -359,9 +366,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             height: 170,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: AppTheme.primaryColor.withOpacity(0.1),
+              color: AppTheme.primaryColor.withValues(alpha: 0.1),
               border: Border.all(
-                color: AppTheme.primaryColor.withOpacity(0.3),
+                color: AppTheme.primaryColor.withValues(alpha: 0.3),
                 width: 3,
               ),
             ),

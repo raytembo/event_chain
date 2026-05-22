@@ -48,8 +48,8 @@ class _TicketSectionState extends State<TicketSection> {
 
   Map<String, dynamic> get _selectedMap => widget.ticketTypes.firstWhere(
         (t) => t['id'] == _selectedId,
-    orElse: () => widget.ticketTypes.first,
-  );
+        orElse: () => widget.ticketTypes.first,
+      );
 
   String get _selectedType => _selectedMap['ticket_type'] as String;
   double get _selectedPrice => (_selectedMap['price'] as num).toDouble();
@@ -58,10 +58,14 @@ class _TicketSectionState extends State<TicketSection> {
 
   Color _typeColor(String type) {
     switch (type.toLowerCase()) {
-      case 'vip':       return const Color(0xFFFFD700);
-      case 'backstage': return const Color(0xFFFF6D00);
-      case 'student':   return const Color(0xFF69F0AE);
-      default:          return AppTheme.primaryColor;
+      case 'vip':
+        return const Color(0xFFFFD700);
+      case 'backstage':
+        return const Color(0xFFFF6D00);
+      case 'student':
+        return const Color(0xFF69F0AE);
+      default:
+        return AppTheme.primaryColor;
     }
   }
 
@@ -117,15 +121,15 @@ class _TicketSectionState extends State<TicketSection> {
           decoration: BoxDecoration(
             color: const Color(0xFF1C1C1C),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: accentColor.withOpacity(0.4)),
+            border: Border.all(color: accentColor.withValues(alpha: 0.4)),
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
               value: _selectedId,
               dropdownColor: const Color(0xFF1E1E1E),
               isExpanded: true,
-              icon: Icon(Icons.expand_more_rounded,
-                  color: accentColor, size: 20),
+              icon:
+                  Icon(Icons.expand_more_rounded, color: accentColor, size: 20),
               style: AppTheme.sans(fontSize: 14, color: Colors.white),
               items: widget.ticketTypes.map((t) {
                 final type = t['ticket_type'] as String;
@@ -145,11 +149,11 @@ class _TicketSectionState extends State<TicketSection> {
                             horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
                           color: (available ? color : Colors.grey)
-                              .withOpacity(0.15),
+                              .withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(5),
                           border: Border.all(
                             color: (available ? color : Colors.grey)
-                                .withOpacity(0.4),
+                                .withValues(alpha: 0.4),
                           ),
                         ),
                         child: Text(
@@ -182,9 +186,8 @@ class _TicketSectionState extends State<TicketSection> {
                           color: available
                               ? AppTheme.subTextColor
                               : AppTheme.tamperedColor,
-                          fontWeight: available
-                              ? FontWeight.normal
-                              : FontWeight.w700,
+                          fontWeight:
+                              available ? FontWeight.normal : FontWeight.w700,
                         ),
                       ),
                     ],
@@ -233,10 +236,10 @@ class _TicketSectionState extends State<TicketSection> {
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 14),
             decoration: BoxDecoration(
-              color: AppTheme.tamperedColor.withOpacity(0.08),
+              color: AppTheme.tamperedColor.withValues(alpha: 0.08),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                  color: AppTheme.tamperedColor.withOpacity(0.3)),
+                  color: AppTheme.tamperedColor.withValues(alpha: 0.3)),
             ),
             child: Center(
               child: Text(
@@ -276,9 +279,9 @@ class AvailabilityChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: chipColor.withOpacity(0.1),
+        color: chipColor.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: chipColor.withOpacity(0.35)),
+        border: Border.all(color: chipColor.withValues(alpha: 0.35)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

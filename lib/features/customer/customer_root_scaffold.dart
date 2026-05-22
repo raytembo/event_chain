@@ -12,14 +12,14 @@ import '../../shared/theme/app_theme.dart';
 import '../auth/auth_provider.dart';
 import '../wallet/wallet_screen.dart';
 import 'customer_discover_screen.dart';
-import '../settings/settings_screen.dart';     // ← new
-import '../profile/profile_screen.dart';       // ← new
+import '../settings/settings_screen.dart'; // ← new
 
 class CustomerRootScaffold extends ConsumerStatefulWidget {
   const CustomerRootScaffold({super.key});
 
   @override
-  ConsumerState<CustomerRootScaffold> createState() => _CustomerRootScaffoldState();
+  ConsumerState<CustomerRootScaffold> createState() =>
+      _CustomerRootScaffoldState();
 }
 
 class _CustomerRootScaffoldState extends ConsumerState<CustomerRootScaffold> {
@@ -28,7 +28,7 @@ class _CustomerRootScaffoldState extends ConsumerState<CustomerRootScaffold> {
   static const _screens = [
     CustomerDiscoverScreen(),
     WalletScreen(),
-    SettingsScreen(),      // ← new third screen
+    SettingsScreen(),
   ];
 
   @override
@@ -44,7 +44,7 @@ class _CustomerRootScaffoldState extends ConsumerState<CustomerRootScaffold> {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 20),
-            color: AppTheme.primaryColor.withOpacity(0.08),
+            color: AppTheme.primaryColor.withValues(alpha: 0.08),
             child: Row(
               children: [
                 const Icon(
@@ -78,7 +78,8 @@ class _CustomerRootScaffoldState extends ConsumerState<CustomerRootScaffold> {
                             onPressed: () => Navigator.pop(context, false),
                             child: Text(
                               'CANCEL',
-                              style: AppTheme.sans(color: AppTheme.subTextColor),
+                              style:
+                                  AppTheme.sans(color: AppTheme.subTextColor),
                             ),
                           ),
                           TextButton(
@@ -126,7 +127,8 @@ class _CustomerRootScaffoldState extends ConsumerState<CustomerRootScaffold> {
                 selectedIcon: Icon(Icons.wallet),
                 label: 'My Tickets',
               ),
-              NavigationDestination(          // ← NEW SETTINGS TAB
+              NavigationDestination(
+                // ← NEW SETTINGS TAB
                 icon: Icon(Icons.settings_outlined),
                 selectedIcon: Icon(Icons.settings),
                 label: 'Settings',

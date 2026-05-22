@@ -44,14 +44,16 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     if (!_formKey.currentState!.validate()) return;
 
     final ok = await ref.read(authProvider.notifier).register(
-      email: _emailCtrl.text.trim(),
-      password: _passCtrl.text,
-      displayName: _nameCtrl.text.trim(),
-      role: _role,
-      phone: _phoneCtrl.text.trim().isEmpty ? null : _phoneCtrl.text.trim(),
-      bio: _bioCtrl.text.trim().isEmpty ? null : _bioCtrl.text.trim(),
-      avatarUrl: _avatarUrlCtrl.text.trim().isEmpty ? null : _avatarUrlCtrl.text.trim(),
-    );
+          email: _emailCtrl.text.trim(),
+          password: _passCtrl.text,
+          displayName: _nameCtrl.text.trim(),
+          role: _role,
+          phone: _phoneCtrl.text.trim().isEmpty ? null : _phoneCtrl.text.trim(),
+          bio: _bioCtrl.text.trim().isEmpty ? null : _bioCtrl.text.trim(),
+          avatarUrl: _avatarUrlCtrl.text.trim().isEmpty
+              ? null
+              : _avatarUrlCtrl.text.trim(),
+        );
 
     if (!mounted) return;
 
@@ -96,7 +98,8 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios, color: AppTheme.primaryColor, size: 18),
+          icon: const Icon(Icons.arrow_back_ios,
+              color: AppTheme.primaryColor, size: 18),
           onPressed: () => Navigator.pushReplacement(
             context,
             MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -104,7 +107,8 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
         ),
         title: Text(
           'CREATE ACCOUNT',
-          style: AppTheme.merri(color: Colors.white, letterSpacing: 2, fontSize: 18),
+          style: AppTheme.merri(
+              color: Colors.white, letterSpacing: 2, fontSize: 18),
         ),
       ),
       body: SingleChildScrollView(
@@ -130,7 +134,8 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
               _field(
                 _nameCtrl,
                 'Full name',
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Required' : null,
               ),
               const SizedBox(height: 20),
               _fieldLabel('EMAIL'),
@@ -150,7 +155,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                 _passCtrl,
                 'At least 8 characters',
                 _obscurePass,
-                    () => setState(() => _obscurePass = !_obscurePass),
+                () => setState(() => _obscurePass = !_obscurePass),
                 validator: (v) {
                   if (v == null || v.isEmpty) return 'Required';
                   if (v.length < 8) return 'Min 8 characters';
@@ -163,7 +168,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                 _confirmCtrl,
                 'Repeat password',
                 _obscureConfirm,
-                    () => setState(() => _obscureConfirm = !_obscureConfirm),
+                () => setState(() => _obscureConfirm = !_obscureConfirm),
                 validator: (v) {
                   if (v != _passCtrl.text) return 'Passwords do not match';
                   return null;
@@ -191,8 +196,10 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                 maxLines: 3,
                 maxLength: 500,
                 style: AppTheme.sans(color: Colors.white),
-                decoration: _inputDec('Tell us a bit about yourself...').copyWith(
-                  counterStyle: AppTheme.sans(color: AppTheme.subTextColor, fontSize: 10),
+                decoration:
+                    _inputDec('Tell us a bit about yourself...').copyWith(
+                  counterStyle:
+                      AppTheme.sans(color: AppTheme.subTextColor, fontSize: 10),
                 ),
                 validator: (v) => null, // Optional
               ),
@@ -216,23 +223,25 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.authenticColor,
                     foregroundColor: Colors.black,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
                     elevation: 0,
                   ),
                   child: auth.loading
                       ? const SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2.5),
-                  )
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                              color: Colors.black, strokeWidth: 2.5),
+                        )
                       : Text(
-                    'CREATE ACCOUNT',
-                    style: AppTheme.sans(
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 3,
-                      fontSize: 14,
-                    ),
-                  ),
+                          'CREATE ACCOUNT',
+                          style: AppTheme.sans(
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 3,
+                            fontSize: 14,
+                          ),
+                        ),
                 ),
               ),
 
@@ -245,12 +254,15 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   ),
                   child: RichText(
                     text: TextSpan(
-                      style: AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
+                      style: AppTheme.sans(
+                          fontSize: 13, color: AppTheme.subTextColor),
                       children: [
                         const TextSpan(text: 'Already have an account?  '),
                         TextSpan(
                           text: 'SIGN IN',
-                          style: AppTheme.sans(color: AppTheme.primaryColor, fontWeight: FontWeight.w700),
+                          style: AppTheme.sans(
+                              color: AppTheme.primaryColor,
+                              fontWeight: FontWeight.w700),
                         ),
                       ],
                     ),
@@ -266,37 +278,37 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   }
 
   Widget _sectionLabel(String text) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Text(
-      text,
-      style: AppTheme.sans(
-        color: AppTheme.primaryColor,
-        fontSize: 11,
-        fontWeight: FontWeight.w700,
-        letterSpacing: 2,
-      ),
-    ),
-  );
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(
+          text,
+          style: AppTheme.sans(
+            color: AppTheme.primaryColor,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 2,
+          ),
+        ),
+      );
 
   Widget _fieldLabel(String text) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Text(
-      text,
-      style: AppTheme.sans(
-        color: AppTheme.subTextColor,
-        fontSize: 10,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 1.5,
-      ),
-    ),
-  );
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(
+          text,
+          style: AppTheme.sans(
+            color: AppTheme.subTextColor,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 1.5,
+          ),
+        ),
+      );
 
   Widget _field(
-      TextEditingController ctrl,
-      String hint, {
-        TextInputType keyboardType = TextInputType.text,
-        String? Function(String?)? validator,
-      }) =>
+    TextEditingController ctrl,
+    String hint, {
+    TextInputType keyboardType = TextInputType.text,
+    String? Function(String?)? validator,
+  }) =>
       TextFormField(
         controller: ctrl,
         keyboardType: keyboardType,
@@ -306,12 +318,12 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       );
 
   Widget _passwordField(
-      TextEditingController ctrl,
-      String hint,
-      bool obscure,
-      VoidCallback toggle, {
-        String? Function(String?)? validator,
-      }) =>
+    TextEditingController ctrl,
+    String hint,
+    bool obscure,
+    VoidCallback toggle, {
+    String? Function(String?)? validator,
+  }) =>
       TextFormField(
         controller: ctrl,
         obscureText: obscure,
@@ -330,33 +342,35 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       );
 
   InputDecoration _inputDec(String hint) => InputDecoration(
-    hintText: hint,
-    hintStyle: AppTheme.sans(color: const Color(0xFF555555), fontSize: 13),
-    filled: true,
-    fillColor: AppTheme.cardMidColor,
-    border: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(10),
-      borderSide: const BorderSide(color: AppTheme.dividerColor),
-    ),
-    enabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(10),
-      borderSide: const BorderSide(color: AppTheme.dividerColor),
-    ),
-    focusedBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(10),
-      borderSide: const BorderSide(color: AppTheme.primaryColor, width: 1.5),
-    ),
-    errorBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(10),
-      borderSide: const BorderSide(color: AppTheme.tamperedColor),
-    ),
-    errorStyle: AppTheme.sans(
-      color: AppTheme.tamperedColor,
-      fontSize: 10,
-      fontWeight: FontWeight.w500,
-    ),
-    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-  );
+        hintText: hint,
+        hintStyle: AppTheme.sans(color: const Color(0xFF555555), fontSize: 13),
+        filled: true,
+        fillColor: AppTheme.cardMidColor,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: AppTheme.dividerColor),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: AppTheme.dividerColor),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide:
+              const BorderSide(color: AppTheme.primaryColor, width: 1.5),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: AppTheme.tamperedColor),
+        ),
+        errorStyle: AppTheme.sans(
+          color: AppTheme.tamperedColor,
+          fontSize: 10,
+          fontWeight: FontWeight.w500,
+        ),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      );
 }
 
 // Role selector widget (unchanged)
@@ -404,7 +418,9 @@ class _RoleSelector extends StatelessWidget {
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: isSelected ? accent.withOpacity(0.12) : AppTheme.cardMidColor,
+            color: isSelected
+                ? accent.withValues(alpha: 0.12)
+                : AppTheme.cardMidColor,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: isSelected ? accent : AppTheme.dividerColor,
@@ -413,7 +429,8 @@ class _RoleSelector extends StatelessWidget {
           ),
           child: Column(
             children: [
-              Icon(icon, color: isSelected ? accent : AppTheme.subTextColor, size: 32),
+              Icon(icon,
+                  color: isSelected ? accent : AppTheme.subTextColor, size: 32),
               const SizedBox(height: 10),
               Text(
                 label,

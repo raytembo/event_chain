@@ -66,7 +66,8 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
       _validating = true;
       _isValid = null;
     });
-    final ok = await ref.read(eventsProvider.notifier).validateEvent(widget.eventName);
+    final ok =
+        await ref.read(eventsProvider.notifier).validateEvent(widget.eventName);
     setState(() {
       _validating = false;
       _isValid = ok;
@@ -75,14 +76,15 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
 
   /// Default share — always PNG (C++ outputs PNG natively; no conversion needed).
   Future<void> _shareTicket(BlockModel block) async {
-    final ffi     = EventChainFFI.instance;
+    final ffi = EventChainFFI.instance;
     final storage = SupabaseStorageService.instance;
     final tempDir = await getTemporaryDirectory();
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Preparing ticket image…', style: AppTheme.sans(fontSize: 13)),
+        content:
+            Text('Preparing ticket image…', style: AppTheme.sans(fontSize: 13)),
         backgroundColor: AppTheme.cardColor,
       ),
     );
@@ -90,17 +92,19 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
     // Try the already-uploaded PNG from Supabase first.
     final localPath = await storage.downloadStegoTicketToTemp(
       eventId: widget.eventId,
-      blockIndex: block.index,
+      blockIndex: block.index + 1, // ← was: block.index (off-by-one)
       tempDir: tempDir.path,
     );
 
     // If not available, re-embed directly to PNG via C++.
-    final sharePath = localPath ?? '${tempDir.path}/stego_${block.ticket.ticketID}.png';
+    final sharePath =
+        localPath ?? '${tempDir.path}/stego_${block.ticket.ticketID}.png';
     if (localPath == null) {
       await ffi.embedTicket(
         eventName: widget.eventName,
         blockIndex: block.index,
-        stegoPath: sharePath, // .png extension → C++ writes PNG via stb_image_write
+        stegoPath:
+            sharePath, // .png extension → C++ writes PNG via stb_image_write
       );
     }
 
@@ -124,7 +128,7 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
   ///
   /// No Dart-side image-processing package is used.
   Future<void> _shareTicketAsFormat(BlockModel block, int format) async {
-    final ffi     = EventChainFFI.instance;
+    final ffi = EventChainFFI.instance;
     final storage = SupabaseStorageService.instance;
     final tempDir = await getTemporaryDirectory();
 
@@ -201,7 +205,8 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
               child: SizedBox(
                 width: 20,
                 height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primaryColor),
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: AppTheme.primaryColor),
               ),
             )
           else
@@ -211,19 +216,18 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
                 _isValid == null
                     ? Icons.shield_outlined
                     : _isValid!
-                    ? Icons.shield
-                    : Icons.shield_moon,
+                        ? Icons.shield
+                        : Icons.shield_moon,
                 color: _isValid == null
                     ? Colors.white
                     : _isValid!
-                    ? AppTheme.authenticColor
-                    : AppTheme.tamperedColor,
+                        ? AppTheme.authenticColor
+                        : AppTheme.tamperedColor,
               ),
               onPressed: _validate,
             ),
         ],
       ),
-
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: AppTheme.primaryColor,
         foregroundColor: Colors.black,
@@ -242,10 +246,10 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
         icon: const Icon(Icons.add),
         label: Text(
           'ADD TICKET',
-          style: AppTheme.sans(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.black),
+          style: AppTheme.sans(
+              fontSize: 13, fontWeight: FontWeight.w700, color: Colors.black),
         ),
       ),
-
       body: Column(
         children: [
           // Poster
@@ -266,7 +270,10 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
-                        colors: [Colors.transparent, AppTheme.cardColor.withOpacity(0.8)],
+                        colors: [
+                          Colors.transparent,
+                          AppTheme.cardColor.withValues(alpha: 0.8)
+                        ],
                       ),
                     ),
                   ),
@@ -279,7 +286,8 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
             AnimatedContainer(
               duration: const Duration(milliseconds: 400),
               width: double.infinity,
-              color: _isValid! ? AppTheme.authenticColor : AppTheme.tamperedColor,
+              color:
+                  _isValid! ? AppTheme.authenticColor : AppTheme.tamperedColor,
               padding: const EdgeInsets.symmetric(vertical: 10),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -291,7 +299,9 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    _isValid! ? 'CHAIN INTACT — ALL BLOCKS VALID' : 'TAMPER DETECTED',
+                    _isValid!
+                        ? 'CHAIN INTACT — ALL BLOCKS VALID'
+                        : 'TAMPER DETECTED',
                     style: AppTheme.sans(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
@@ -324,11 +334,14 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
               children: [
                 Row(
                   children: [
-                    const Icon(Icons.calendar_today_rounded, size: 14, color: AppTheme.subTextColor),
+                    const Icon(Icons.calendar_today_rounded,
+                        size: 14, color: AppTheme.subTextColor),
                     const SizedBox(width: 6),
-                    Text(widget.eventDate ?? '', style: AppTheme.sans(fontSize: 13)),
+                    Text(widget.eventDate ?? '',
+                        style: AppTheme.sans(fontSize: 13)),
                     const Spacer(),
-                    const Icon(Icons.location_on_outlined, size: 14, color: AppTheme.subTextColor),
+                    const Icon(Icons.location_on_outlined,
+                        size: 14, color: AppTheme.subTextColor),
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
@@ -345,16 +358,19 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
                     onTap: () {},
                     child: Row(
                       children: [
-                        const Icon(Icons.map, size: 16, color: AppTheme.primaryColor),
+                        const Icon(Icons.map,
+                            size: 16, color: AppTheme.primaryColor),
                         const SizedBox(width: 6),
                         Text(
                           '${widget.latitude!.toStringAsFixed(5)}, ${widget.longitude!.toStringAsFixed(5)}',
-                          style: AppTheme.sans(fontSize: 13, color: AppTheme.primaryColor),
+                          style: AppTheme.sans(
+                              fontSize: 13, color: AppTheme.primaryColor),
                         ),
                         const Spacer(),
                         Text(
                           'View on Map',
-                          style: AppTheme.sans(fontSize: 12, color: AppTheme.primaryColor),
+                          style: AppTheme.sans(
+                              fontSize: 12, color: AppTheme.primaryColor),
                         ),
                       ],
                     ),
@@ -368,26 +384,32 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
           Expanded(
             child: tickets.isEmpty
                 ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.confirmation_number_outlined, size: 48, color: AppTheme.subTextColor),
-                  const SizedBox(height: 16),
-                  Text('No tickets yet.', style: AppTheme.merri(fontSize: 16, color: AppTheme.subTextColor)),
-                  const SizedBox(height: 4),
-                  Text('Tap + to add the first one.', style: AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor)),
-                ],
-              ),
-            )
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.confirmation_number_outlined,
+                            size: 48, color: AppTheme.subTextColor),
+                        const SizedBox(height: 16),
+                        Text('No tickets yet.',
+                            style: AppTheme.merri(
+                                fontSize: 16, color: AppTheme.subTextColor)),
+                        const SizedBox(height: 4),
+                        Text('Tap + to add the first one.',
+                            style: AppTheme.sans(
+                                fontSize: 13, color: AppTheme.subTextColor)),
+                      ],
+                    ),
+                  )
                 : ListView.builder(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
-              itemCount: tickets.length,
-              itemBuilder: (_, i) => _TicketCard(
-                block: tickets[i],
-                onShare: () => _shareTicket(tickets[i]),
-                onShareAsFormat: (format) => _shareTicketAsFormat(tickets[i], format),
-              ),
-            ),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
+                    itemCount: tickets.length,
+                    itemBuilder: (_, i) => _TicketCard(
+                      block: tickets[i],
+                      onShare: () => _shareTicket(tickets[i]),
+                      onShareAsFormat: (format) =>
+                          _shareTicketAsFormat(tickets[i], format),
+                    ),
+                  ),
           ),
         ],
       ),
@@ -403,21 +425,30 @@ class _StatChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-    decoration: BoxDecoration(
-      color: AppTheme.cardMidColor,
-      borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: AppTheme.dividerColor),
-    ),
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(value, style: AppTheme.merri(fontSize: 22, fontWeight: FontWeight.w700, color: AppTheme.primaryColor)),
-        const SizedBox(height: 2),
-        Text(label, style: AppTheme.sans(fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 1.1, color: AppTheme.subTextColor)),
-      ],
-    ),
-  );
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppTheme.cardMidColor,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppTheme.dividerColor),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(value,
+                style: AppTheme.merri(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.primaryColor)),
+            const SizedBox(height: 2),
+            Text(label,
+                style: AppTheme.sans(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1.1,
+                    color: AppTheme.subTextColor)),
+          ],
+        ),
+      );
 }
 
 // ── Ticket Card ───────────────────────────────────────────────────────────────
@@ -434,16 +465,21 @@ class _TicketCard extends StatelessWidget {
 
   Color _typeColor(String type) {
     switch (type.toLowerCase()) {
-      case 'vip':       return const Color(0xFFFFD700);
-      case 'backstage': return const Color(0xFFFF6D00);
-      case 'student':   return const Color(0xFF69F0AE);
-      default:          return AppTheme.primaryColor;
+      case 'vip':
+        return const Color(0xFFFFD700);
+      case 'backstage':
+        return const Color(0xFFFF6D00);
+      case 'student':
+        return const Color(0xFF69F0AE);
+      default:
+        return AppTheme.primaryColor;
     }
   }
 
   /// Format menu — limited to PNG and BMP, the only lossless formats
   /// the C++ steganography layer can produce without an external package.
-  void _showFormatMenu(BuildContext context, ValueChanged<int> onShareAsFormat) {
+  void _showFormatMenu(
+      BuildContext context, ValueChanged<int> onShareAsFormat) {
     showModalBottomSheet(
       context: context,
       backgroundColor: AppTheme.cardColor,
@@ -459,18 +495,21 @@ class _TicketCard extends StatelessWidget {
             children: [
               Text(
                 'Share Ticket As',
-                style: AppTheme.merri(fontSize: 18, fontWeight: FontWeight.w700),
+                style:
+                    AppTheme.merri(fontSize: 18, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 4),
               Text(
                 'Only lossless formats are supported to preserve hidden ticket data.',
-                style: AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor),
+                style:
+                    AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor),
               ),
               const SizedBox(height: 16),
               _FormatOption(
                 icon: Icons.image_outlined,
                 label: 'PNG (Recommended)',
-                subtitle: 'Lossless · preserves hidden payload · smallest lossless size',
+                subtitle:
+                    'Lossless · preserves hidden payload · smallest lossless size',
                 onTap: () {
                   Navigator.pop(ctx);
                   onShareAsFormat(ImageFormat.png);
@@ -502,7 +541,7 @@ class _TicketCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppTheme.cardMidColor,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: typeColor.withOpacity(0.35)),
+        border: Border.all(color: typeColor.withValues(alpha: 0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -511,7 +550,8 @@ class _TicketCard extends StatelessWidget {
             height: 4,
             decoration: BoxDecoration(
               color: typeColor,
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(12)),
             ),
           ),
           Padding(
@@ -522,34 +562,47 @@ class _TicketCard extends StatelessWidget {
                 Row(
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: typeColor.withOpacity(0.15),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
                         t.ticketType.toUpperCase(),
-                        style: AppTheme.sans(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.8, color: typeColor),
+                        style: AppTheme.sans(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                            color: typeColor),
                       ),
                     ),
                     const Spacer(),
-                    Text('BLOCK #${block.index}', style: AppTheme.sans(fontSize: 11, color: AppTheme.subTextColor)),
+                    Text('BLOCK #${block.index}',
+                        style: AppTheme.sans(
+                            fontSize: 11, color: AppTheme.subTextColor)),
                   ],
                 ),
                 const SizedBox(height: 10),
-                Text(t.eventName, style: AppTheme.merri(fontSize: 15, fontWeight: FontWeight.w700)),
+                Text(t.eventName,
+                    style: AppTheme.merri(
+                        fontSize: 15, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 4),
                 Row(
                   children: [
-                    const Icon(Icons.calendar_today_outlined, size: 13, color: AppTheme.subTextColor),
+                    const Icon(Icons.calendar_today_outlined,
+                        size: 13, color: AppTheme.subTextColor),
                     const SizedBox(width: 4),
-                    Text(t.eventDate, style: AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor)),
+                    Text(t.eventDate,
+                        style: AppTheme.sans(
+                            fontSize: 12, color: AppTheme.subTextColor)),
                     const SizedBox(width: 10),
-                    const Icon(Icons.location_on_outlined, size: 13, color: AppTheme.subTextColor),
+                    const Icon(Icons.location_on_outlined,
+                        size: 13, color: AppTheme.subTextColor),
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(t.venue,
-                          style: AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor),
+                          style: AppTheme.sans(
+                              fontSize: 12, color: AppTheme.subTextColor),
                           overflow: TextOverflow.ellipsis),
                     ),
                   ],
@@ -557,13 +610,16 @@ class _TicketCard extends StatelessWidget {
                 const SizedBox(height: 2),
                 Row(
                   children: [
-                    const Icon(Icons.person_outline, size: 13, color: AppTheme.subTextColor),
+                    const Icon(Icons.person_outline,
+                        size: 13, color: AppTheme.subTextColor),
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
                         '${t.ownerName}  ·  ${t.ownerID}',
-                        style: AppTheme.sans(fontSize: 11, color: AppTheme.subTextColor),
+                        style: AppTheme.sans(
+                            fontSize: 11, color: AppTheme.subTextColor),
                         overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
                       ),
                     ),
                   ],
@@ -574,37 +630,52 @@ class _TicketCard extends StatelessWidget {
                   children: [
                     Text(
                       'MWK ${t.price.toStringAsFixed(2)}',
-                      style: AppTheme.merri(fontSize: 20, fontWeight: FontWeight.w700, color: AppTheme.primaryColor),
+                      style: AppTheme.merri(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.primaryColor),
                     ),
                     Row(
                       children: [
                         OutlinedButton(
-                          onPressed: () => _showFormatMenu(context, onShareAsFormat),
+                          onPressed: () =>
+                              _showFormatMenu(context, onShareAsFormat),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: typeColor,
-                            side: BorderSide(color: typeColor.withOpacity(0.7)),
-                            backgroundColor: typeColor.withOpacity(0.07),
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            side: BorderSide(
+                                color: typeColor.withValues(alpha: 0.7)),
+                            backgroundColor: typeColor.withValues(alpha: 0.07),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 8),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
                             minimumSize: Size.zero,
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
-                          child: Icon(Icons.more_vert, size: 16, color: typeColor),
+                          child:
+                              Icon(Icons.more_vert, size: 16, color: typeColor),
                         ),
                         const SizedBox(width: 8),
                         OutlinedButton.icon(
                           onPressed: onShare,
                           style: OutlinedButton.styleFrom(
                             foregroundColor: typeColor,
-                            side: BorderSide(color: typeColor.withOpacity(0.7)),
-                            backgroundColor: typeColor.withOpacity(0.07),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            side: BorderSide(
+                                color: typeColor.withValues(alpha: 0.7)),
+                            backgroundColor: typeColor.withValues(alpha: 0.07),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 8),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
                           ),
                           icon: const Icon(Icons.share_outlined, size: 16),
                           label: Text(
                             'SHARE',
-                            style: AppTheme.sans(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.5, color: typeColor),
+                            style: AppTheme.sans(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.5,
+                                color: typeColor),
                           ),
                         ),
                       ],
@@ -638,8 +709,10 @@ class _FormatOption extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       leading: Icon(icon, color: AppTheme.primaryColor),
-      title: Text(label, style: AppTheme.sans(fontSize: 14, fontWeight: FontWeight.w600)),
-      subtitle: Text(subtitle, style: AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor)),
+      title: Text(label,
+          style: AppTheme.sans(fontSize: 14, fontWeight: FontWeight.w600)),
+      subtitle: Text(subtitle,
+          style: AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor)),
       onTap: onTap,
       contentPadding: EdgeInsets.zero,
     );

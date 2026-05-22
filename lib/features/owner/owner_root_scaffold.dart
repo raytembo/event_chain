@@ -4,13 +4,12 @@
 // Tabs: Events (manage) | Scanner (gate verify) | Export (attendee list) | Settings
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_fonts/google_fonts.dart';
 import '../events/events_screen.dart';
 import '../scanner/scanner_screen.dart';
 import 'attendee_export_screen.dart';
-import 'settings_screen_owner.dart';                     // ← New settings screen
+import 'settings_screen_owner.dart'; // ← New settings screen
 import '../auth/auth_provider.dart';
-import '../../shared/theme/app_theme.dart';       // ← Updated import to use shared AppTheme
+import '../../shared/theme/app_theme.dart'; // ← Updated import to use shared AppTheme
 
 class OwnerRootScaffold extends ConsumerStatefulWidget {
   const OwnerRootScaffold({super.key});
@@ -26,7 +25,7 @@ class _OwnerRootScaffoldState extends ConsumerState<OwnerRootScaffold> {
     EventsScreen(),
     ScannerScreen(),
     AttendeeExportScreen(),
-    SettingsScreen(),          // ← 4th tab added
+    SettingsScreen(), // ← 4th tab added
   ];
 
   @override
@@ -42,15 +41,16 @@ class _OwnerRootScaffoldState extends ConsumerState<OwnerRootScaffold> {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
-            color: const Color(0xFF7C4DFF).withOpacity(0.12),
+            color: AppTheme.primaryColor.withValues(alpha: 0.02),
             child: Row(
               children: [
-                const Icon(Icons.manage_accounts, color: Color(0xFF7C4DFF), size: 14),
+                const Icon(Icons.manage_accounts,
+                    color: AppTheme.primaryColor, size: 14),
                 const SizedBox(width: 6),
                 Text(
                   'OWNER · ${user?.displayName ?? ''}',
                   style: AppTheme.sans(
-                    color: const Color(0xFF7C4DFF),
+                    color: AppTheme.primaryColor,
                     fontSize: 10,
                     letterSpacing: 1,
                   ),
@@ -78,7 +78,8 @@ class _OwnerRootScaffoldState extends ConsumerState<OwnerRootScaffold> {
                             onPressed: () => Navigator.pop(context, true),
                             child: Text(
                               'SIGN OUT',
-                              style: AppTheme.sans(color: const Color(0xFFFF1744)),
+                              style:
+                                  AppTheme.sans(color: const Color(0xFFFF1744)),
                             ),
                           ),
                         ],
@@ -121,7 +122,8 @@ class _OwnerRootScaffoldState extends ConsumerState<OwnerRootScaffold> {
                 selectedIcon: Icon(Icons.download),
                 label: 'Export',
               ),
-              NavigationDestination(          // ← New Settings button/tab
+              NavigationDestination(
+                // ← New Settings button/tab
                 icon: Icon(Icons.settings_outlined),
                 selectedIcon: Icon(Icons.settings),
                 label: 'Settings',

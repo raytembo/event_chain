@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/models/user_model.dart';
 import '../../shared/theme/app_theme.dart';
-import '../customer/customer_root_scaffold.dart';   // ← Customer root
-import '../owner/owner_root_scaffold.dart';         // ← Owner root (create if not exists)
+import '../customer/customer_root_scaffold.dart'; // ← Customer root
+import '../owner/owner_root_scaffold.dart'; // ← Owner root (create if not exists)
 import 'auth_provider.dart';
 import 'register_screen.dart';
 
@@ -50,9 +50,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     if (!_formKey.currentState!.validate()) return;
 
     final ok = await ref.read(authProvider.notifier).login(
-      email: _emailCtrl.text.trim(),
-      password: _passCtrl.text,
-    );
+          email: _emailCtrl.text.trim(),
+          password: _passCtrl.text,
+        );
 
     if (!mounted) return;
 
@@ -125,9 +125,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     border: Border.all(color: AppTheme.primaryColor, width: 2),
-                    color: AppTheme.primaryColor.withOpacity(0.08),
+                    color: AppTheme.primaryColor.withValues(alpha: 0.08),
                   ),
-                  child: Icon(Icons.link, color: AppTheme.primaryColor, size: 32),
+                  child:
+                      const Icon(Icons.link, color: AppTheme.primaryColor, size: 32),
                 ),
               ),
 
@@ -173,7 +174,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                       },
                     ),
                     const SizedBox(height: 20),
-
                     _fieldLabel('PASSWORD'),
                     TextFormField(
                       controller: _passCtrl,
@@ -189,11 +189,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                           onPressed: () => setState(() => _obscure = !_obscure),
                         ),
                       ),
-                      validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                      validator: (v) =>
+                          (v == null || v.isEmpty) ? 'Required' : null,
                     ),
-
                     const SizedBox(height: 36),
-
                     SizedBox(
                       width: double.infinity,
                       height: 52,
@@ -209,28 +208,28 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                         ),
                         child: auth.loading
                             ? const SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(
-                            color: Colors.black,
-                            strokeWidth: 2.5,
-                          ),
-                        )
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  color: Colors.black,
+                                  strokeWidth: 2.5,
+                                ),
+                              )
                             : Text(
-                          'SIGN IN',
-                          style: AppTheme.sans(
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 3,
-                            fontSize: 14,
-                          ),
-                        ),
+                                'SIGN IN',
+                                style: AppTheme.sans(
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 3,
+                                  fontSize: 14,
+                                ),
+                              ),
                       ),
                     ),
-
                     const SizedBox(height: 32),
                     Row(
                       children: [
-                        const Expanded(child: Divider(color: AppTheme.dividerColor)),
+                        const Expanded(
+                            child: Divider(color: AppTheme.dividerColor)),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           child: Text(
@@ -241,20 +240,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                             ),
                           ),
                         ),
-                        const Expanded(child: Divider(color: AppTheme.dividerColor)),
+                        const Expanded(
+                            child: Divider(color: AppTheme.dividerColor)),
                       ],
                     ),
                     const SizedBox(height: 24),
-
                     Center(
                       child: TextButton(
                         onPressed: () => Navigator.pushReplacement(
                           context,
-                          MaterialPageRoute(builder: (_) => const RegisterScreen()),
+                          MaterialPageRoute(
+                              builder: (_) => const RegisterScreen()),
                         ),
                         child: RichText(
                           text: TextSpan(
-                            style: AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
+                            style: AppTheme.sans(
+                                fontSize: 13, color: AppTheme.subTextColor),
                             children: [
                               const TextSpan(text: "Don't have an account?  "),
                               TextSpan(
@@ -292,44 +293,46 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   }
 
   Widget _fieldLabel(String text) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Text(
-      text,
-      style: AppTheme.sans(
-        color: AppTheme.primaryColor,
-        fontSize: 10,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 2,
-      ),
-    ),
-  );
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(
+          text,
+          style: AppTheme.sans(
+            color: AppTheme.primaryColor,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 2,
+          ),
+        ),
+      );
 
   InputDecoration _inputDec(String hint) => InputDecoration(
-    hintText: hint,
-    hintStyle: AppTheme.sans(color: const Color(0xFF555555), fontSize: 13),
-    filled: true,
-    fillColor: AppTheme.cardMidColor,
-    border: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(10),
-      borderSide: const BorderSide(color: AppTheme.dividerColor),
-    ),
-    enabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(10),
-      borderSide: const BorderSide(color: AppTheme.dividerColor),
-    ),
-    focusedBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(10),
-      borderSide: const BorderSide(color: AppTheme.primaryColor, width: 1.5),
-    ),
-    errorBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(10),
-      borderSide: const BorderSide(color: AppTheme.tamperedColor),
-    ),
-    errorStyle: AppTheme.sans(
-      color: AppTheme.tamperedColor,
-      fontSize: 10,
-      fontWeight: FontWeight.w500,
-    ),
-    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-  );
+        hintText: hint,
+        hintStyle: AppTheme.sans(color: const Color(0xFF555555), fontSize: 13),
+        filled: true,
+        fillColor: AppTheme.cardMidColor,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: AppTheme.dividerColor),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: AppTheme.dividerColor),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide:
+              const BorderSide(color: AppTheme.primaryColor, width: 1.5),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: AppTheme.tamperedColor),
+        ),
+        errorStyle: AppTheme.sans(
+          color: AppTheme.tamperedColor,
+          fontSize: 10,
+          fontWeight: FontWeight.w500,
+        ),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      );
 }

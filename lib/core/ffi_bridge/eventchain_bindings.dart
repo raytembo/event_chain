@@ -1,117 +1,114 @@
 // lib/core/ffi_bridge/eventchain_bindings.dart
-//
-// Raw FFI type bindings for libEventChain.so.
-// C++ layer writes PNG (via stb_image_write) and BMP only.
-// Lossy formats (JPEG, WebP) are hard-rejected by the C++ layer.
 
 import 'dart:ffi';
 import 'package:ffi/ffi.dart';
 
-// ── Type aliases ────────────────────────────────────────────────────────────
-typedef _CreateNative  = Pointer<Void> Function(Pointer<Utf8>, Int32);
-typedef _CreateDart    = Pointer<Void> Function(Pointer<Utf8>, int);
+// ── Type aliases ─────────────────────────────────────────────────────────────
+typedef CreateNative = Pointer<Void> Function(Pointer<Utf8>, Int32);
+typedef CreateDart = Pointer<Void> Function(Pointer<Utf8>, int);
 
+typedef DestroyNative = Void Function(Pointer<Void>);
+typedef DestroyDart = void Function(Pointer<Void>);
 
+typedef FreeStringNative = Void Function(Pointer<Utf8>);
+typedef FreeStringDart = void Function(Pointer<Utf8>);
 
-typedef _DestroyNative = Void Function(Pointer<Void>);
-typedef _DestroyDart   = void Function(Pointer<Void>);
+typedef IntStrNative = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef IntStrDart = int Function(Pointer<Void>, Pointer<Utf8>);
 
-typedef _FreeStringNative = Void Function(Pointer<Utf8>);
-typedef _FreeStringDart   = void Function(Pointer<Utf8>);
+typedef AddTicketNative = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+typedef AddTicketDart = int Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
 
-typedef _IntStrNative  = Int32 Function(Pointer<Void>, Pointer<Utf8>);
-typedef _IntStrDart    = int   Function(Pointer<Void>, Pointer<Utf8>);
-
-typedef _AddTicketNative = Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
-typedef _AddTicketDart   = int   Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
-
-typedef _TransferNative = Int32 Function(
+typedef TransferNative = Int32 Function(
     Pointer<Void>, Pointer<Utf8>, Int32, Pointer<Utf8>, Pointer<Utf8>);
-typedef _TransferDart = int Function(
+typedef TransferDart = int Function(
     Pointer<Void>, Pointer<Utf8>, int, Pointer<Utf8>, Pointer<Utf8>);
 
-typedef _GetChainJsonNative = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
-typedef _GetChainJsonDart   = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
+typedef GetChainJsonNative = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>);
+typedef GetChainJsonDart = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
 
-typedef _GetTicketJsonNative = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Int32);
-typedef _GetTicketJsonDart   = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, int);
+typedef GetTicketJsonNative = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Int32);
+typedef GetTicketJsonDart = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, int);
 
-typedef _ListEventsNative = Pointer<Utf8> Function(Pointer<Void>);
-typedef _ListEventsDart   = Pointer<Utf8> Function(Pointer<Void>);
+typedef ListEventsNative = Pointer<Utf8> Function(Pointer<Void>);
+typedef ListEventsDart = Pointer<Utf8> Function(Pointer<Void>);
 
-// ── Steganography typedefs ───────────────────────────────────────────────────
-// generateCover has NO handle parameter — it is a standalone utility.
-// C signature: int eventchain_generate_cover(const char* outputPath, int w, int h)
-// PNG output path → stb_image_write; BMP → CImg native.
-// Passing a .jpg / .webp path is rejected by C++ with return value -1.
-typedef _GenCoverNative = Int32 Function(Pointer<Utf8>, Int32, Int32);
-typedef _GenCoverDart   = int   Function(Pointer<Utf8>, int, int);
+// ── Steganography typedefs ────────────────────────────────────────────────────
+typedef GenCoverNative = Int32 Function(Pointer<Utf8>, Int32, Int32);
+typedef GenCoverDart = int Function(Pointer<Utf8>, int, int);
 
-typedef _EmbedNative = Int32 Function(
+typedef EmbedNative = Int32 Function(
     Pointer<Void>, Pointer<Utf8>, Int32, Pointer<Utf8>, Pointer<Utf8>);
-typedef _EmbedDart = int Function(
+typedef EmbedDart = int Function(
     Pointer<Void>, Pointer<Utf8>, int, Pointer<Utf8>, Pointer<Utf8>);
 
-typedef _ExtractVerifyNative = Int32 Function(
+typedef ExtractVerifyNative = Int32 Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Int32);
-typedef _ExtractVerifyDart = int Function(
+typedef ExtractVerifyDart = int Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int);
 
-typedef _CapacityNative = Int32 Function(Int32, Int32);
-typedef _CapacityDart   = int   Function(int, int);
+typedef CapacityNative = Int32 Function(Int32, Int32);
+typedef CapacityDart = int Function(int, int);
 
-typedef _VersionNative = Pointer<Utf8> Function();
-typedef _VersionDart   = Pointer<Utf8> Function();
+typedef VersionNative = Pointer<Utf8> Function();
+typedef VersionDart = Pointer<Utf8> Function();
 
-
-
-// ── EventChainBindings ──────────────────────────────────────────────────────
+// ── EventChainBindings ────────────────────────────────────────────────────────
 class EventChainBindings {
   final DynamicLibrary _lib;
 
   EventChainBindings(this._lib);
 
-  late final _CreateDart  create  = _lib
-      .lookupFunction<_CreateNative, _CreateDart>('eventchain_create');
-  late final _DestroyDart destroy = _lib
-      .lookupFunction<_DestroyNative, _DestroyDart>('eventchain_destroy');
+  late final CreateDart create =
+      _lib.lookupFunction<CreateNative, CreateDart>('eventchain_create');
+  late final DestroyDart destroy =
+      _lib.lookupFunction<DestroyNative, DestroyDart>('eventchain_destroy');
 
-  late final _FreeStringDart freeString = _lib
-      .lookupFunction<_FreeStringNative, _FreeStringDart>('eventchain_free_string');
+  late final FreeStringDart freeString =
+      _lib.lookupFunction<FreeStringNative, FreeStringDart>(
+          'eventchain_free_string');
 
-  late final _AddTicketDart addTicket = _lib
-      .lookupFunction<_AddTicketNative, _AddTicketDart>('eventchain_add_ticket');
-  late final _IntStrDart validate = _lib
-      .lookupFunction<_IntStrNative, _IntStrDart>('eventchain_validate');
-  late final _IntStrDart getSize = _lib
-      .lookupFunction<_IntStrNative, _IntStrDart>('eventchain_get_size');
-  late final _GetChainJsonDart getChainJson = _lib
-      .lookupFunction<_GetChainJsonNative, _GetChainJsonDart>('eventchain_get_chain_json');
-  late final _TransferDart transferOwnership = _lib
-      .lookupFunction<_TransferNative, _TransferDart>('eventchain_transfer_ownership');
-  late final _GetTicketJsonDart getTicketJson = _lib
-      .lookupFunction<_GetTicketJsonNative, _GetTicketJsonDart>('eventchain_get_ticket_json');
-  late final _IntStrDart save = _lib
-      .lookupFunction<_IntStrNative, _IntStrDart>('eventchain_save');
-  late final _IntStrDart load = _lib
-      .lookupFunction<_IntStrNative, _IntStrDart>('eventchain_load');
-  late final _ListEventsDart listEvents = _lib
-      .lookupFunction<_ListEventsNative, _ListEventsDart>('eventchain_list_events');
+  late final AddTicketDart addTicket = _lib
+      .lookupFunction<AddTicketNative, AddTicketDart>('eventchain_add_ticket');
+  late final IntStrDart validate =
+      _lib.lookupFunction<IntStrNative, IntStrDart>('eventchain_validate');
+  late final IntStrDart getSize =
+      _lib.lookupFunction<IntStrNative, IntStrDart>('eventchain_get_size');
+  late final GetChainJsonDart getChainJson =
+      _lib.lookupFunction<GetChainJsonNative, GetChainJsonDart>(
+          'eventchain_get_chain_json');
+  late final TransferDart transferOwnership =
+      _lib.lookupFunction<TransferNative, TransferDart>(
+          'eventchain_transfer_ownership');
+  late final GetTicketJsonDart getTicketJson =
+      _lib.lookupFunction<GetTicketJsonNative, GetTicketJsonDart>(
+          'eventchain_get_ticket_json');
+  late final IntStrDart save =
+      _lib.lookupFunction<IntStrNative, IntStrDart>('eventchain_save');
+  late final IntStrDart load =
+      _lib.lookupFunction<IntStrNative, IntStrDart>('eventchain_load');
+  late final ListEventsDart listEvents =
+      _lib.lookupFunction<ListEventsNative, ListEventsDart>(
+          'eventchain_list_events');
 
-  // ── Steganography ───────────────────────────────────────────────────────
-  // generateCover: no handle — standalone utility function.
-  // C signature: int eventchain_generate_cover(const char*, int, int)
-  // Outputs PNG by default (via stb_image_write). BMP also accepted.
-  // Lossy formats (JPEG, WebP) are rejected by the C++ layer.
-  late final _GenCoverDart generateCover = _lib
-      .lookupFunction<_GenCoverNative, _GenCoverDart>('eventchain_generate_cover');
-  late final _EmbedDart embedTicket = _lib
-      .lookupFunction<_EmbedNative, _EmbedDart>('eventchain_embed_ticket');
-  late final _ExtractVerifyDart extractVerify = _lib
-      .lookupFunction<_ExtractVerifyNative, _ExtractVerifyDart>('eventchain_extract_verify');
-  late final _CapacityDart capacity = _lib
-      .lookupFunction<_CapacityNative, _CapacityDart>('eventchain_stego_capacity');
+  // ── Steganography ──────────────────────────────────────────────────────────
+  late final GenCoverDart generateCover =
+      _lib.lookupFunction<GenCoverNative, GenCoverDart>(
+          'eventchain_generate_cover');
+  late final EmbedDart embedTicket =
+      _lib.lookupFunction<EmbedNative, EmbedDart>('eventchain_embed_ticket');
+  late final ExtractVerifyDart extractVerify =
+      _lib.lookupFunction<ExtractVerifyNative, ExtractVerifyDart>(
+          'eventchain_extract_verify');
+  late final CapacityDart capacity =
+      _lib.lookupFunction<CapacityNative, CapacityDart>(
+          'eventchain_stego_capacity');
 
-  late final _VersionDart version = _lib
-      .lookupFunction<_VersionNative, _VersionDart>('eventchain_version');
+  late final VersionDart version =
+      _lib.lookupFunction<VersionNative, VersionDart>('eventchain_version');
 }

@@ -67,9 +67,16 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.14.4
   # build_runner        ← gone, nothing needs codegen anymore
   # riverpod_generator  ← gone
   # isar_community_generator ← gone
+
+flutter_icons:
+  android: true
+  image_path: "assets/EventChainIcons/appstore.png"
+  adaptive_icon_foreground: "assets/EventChainIcons/appstore.png"
+  adaptive_icon_background: "#FF0A0A0A"
 
 flutter:
   uses-material-design: true

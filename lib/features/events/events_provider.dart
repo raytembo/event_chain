@@ -14,36 +14,37 @@ import '../../core/services/supabase_storage_service.dart';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 class EventsState {
+  
   final List<String> eventNames;
-  final bool         loading;
-  final String?      error;
-  final Set<String>  syncing;
+  final bool loading;
+  final String? error;
+  final Set<String> syncing;
 
   const EventsState({
     this.eventNames = const [],
-    this.loading    = false,
+    this.loading = false,
     this.error,
-    this.syncing    = const {},
+    this.syncing = const {},
   });
 
   EventsState copyWith({
     List<String>? eventNames,
-    bool?         loading,
-    String?       error,
-    bool          clearError = false,
-    Set<String>?  syncing,
+    bool? loading,
+    String? error,
+    bool clearError = false,
+    Set<String>? syncing,
   }) =>
       EventsState(
         eventNames: eventNames ?? this.eventNames,
-        loading:    loading    ?? this.loading,
-        error:      clearError ? null : error ?? this.error,
-        syncing:    syncing    ?? this.syncing,
+        loading: loading ?? this.loading,
+        error: clearError ? null : error ?? this.error,
+        syncing: syncing ?? this.syncing,
       );
 }
 
-// ── Notifier ─────────────────────────────────────────────────────────────────
+// ── Notifier ──────────────────────────────────────────────────────────────────
 class EventsNotifier extends Notifier<EventsState> {
-  final _ffi     = EventChainFFI.instance;
+  final _ffi = EventChainFFI.instance;
   final _storage = SupabaseStorageService.instance;
   final _supabase = Supabase.instance.client;
 
@@ -54,7 +55,7 @@ class EventsNotifier extends Notifier<EventsState> {
     try {
       state = state.copyWith(
         eventNames: _ffi.listEvents(),
-        loading:    false,
+        loading: false,
         clearError: true,
       );
     } catch (e) {
@@ -65,10 +66,7 @@ class EventsNotifier extends Notifier<EventsState> {
   Future<bool> loadRemoteChain(String eventName) async {
     state = state.copyWith(syncing: {...state.syncing, eventName});
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      final eventsDir = '${dir.path}/events';
-      await Directory(eventsDir).create(recursive: true);
-
+      final eventsDir = await _eventsDir();
       final ok = await _storage.downloadBlockchainFile(
         eventName: eventName,
         localEventsDir: eventsDir,
@@ -90,7 +88,6 @@ class EventsNotifier extends Notifier<EventsState> {
     }
   }
 
-  /// Returns the pre-configured price for each ticket type of an event.
   Future<Map<String, double>> getTicketPrices(String eventId) async {
     try {
       final res = await _supabase
@@ -98,21 +95,18 @@ class EventsNotifier extends Notifier<EventsState> {
           .select('ticket_type, price')
           .eq('event_id', eventId);
 
-      final map = <String, double>{};
-      for (final row in List<Map<String, dynamic>>.from(res)) {
-        final type = row['ticket_type'] as String;
-        final price = (row['price'] as num).toDouble();
-        map[type] = price;
-      }
-      return map;
+      return {
+        for (final row in List<Map<String, dynamic>>.from(res))
+          row['ticket_type'] as String: (row['price'] as num).toDouble(),
+      };
     } catch (e) {
-      debugPrint('Failed to load ticket prices: $e');
+      debugPrint('❌ Failed to load ticket prices: $e');
       return {};
     }
   }
 
-  /// Create a ticket with steganography.
-  /// C++ outputs PNG directly via stb_image_write — no Dart conversion needed.
+  /// Creates a ticket, embeds it via steganography, and syncs everything to
+  /// Supabase storage.  Returns `(true, localStegoPath)` on full success.
   Future<(bool success, String? stegoLocalPath)> addTicket({
     required String eventName,
     required String eventId,
@@ -125,18 +119,21 @@ class EventsNotifier extends Notifier<EventsState> {
     required double price,
   }) async {
     state = state.copyWith(loading: true, clearError: true);
-    String? finalStegoPath;
 
     try {
       debugPrint('=== TICKET CREATION START ===');
-      debugPrint('Event: $eventName | ID: $eventId | Type: $ticketType | Price: MWK $price');
+      debugPrint(
+          'Event: $eventName | ID: $eventId | Type: $ticketType | Price: MWK $price');
 
-      final dir = await getApplicationDocumentsDirectory();
-      final tempDir = await getTemporaryDirectory();
-      final eventsDir = '${dir.path}/events';
+      // FIX: resolve BOTH directories up-front so we can search all candidate
+      // locations when looking for the blockchain file later.
+      final appDocDir = (await getApplicationDocumentsDirectory()).path;
+      final eventsDir = '$appDocDir/events';
       await Directory(eventsDir).create(recursive: true);
 
-      // ── Step 1: Build ticket model ────────────────────────────────────────
+      final tempPath = (await getTemporaryDirectory()).path;
+
+      // ── Step 1: Build ticket model ─────────────────────────────────────────
       final ticket = TicketModel(
         ticketID: const Uuid().v4().substring(0, 8).toUpperCase(),
         eventName: eventName,
@@ -148,26 +145,29 @@ class EventsNotifier extends Notifier<EventsState> {
         price: price,
       );
 
-      // ── Step 2: Mine block in C++ ─────────────────────────────────────────
+      // ── Step 2: Mine block in C++ ──────────────────────────────────────────
       final mined = await _ffi.addTicket(eventName, ticket);
-      if (!mined) {
-        throw Exception('Mining failed in native layer');
-      }
+      if (!mined) throw Exception('Mining failed in native layer');
 
+      // blockIndex is 0-based (C++ chain index).
+      // storageIndex is 1-based so filenames match: ticket_1, ticket_2, …
       final blockIndex = _ffi.getEventSize(eventName) - 1;
+      final storageIndex = blockIndex + 1;
 
-      // ── Step 3: Download poster + embed steganography ─────────────────────
+      debugPrint(
+          '✅ Block mined — blockIndex: $blockIndex  storageIndex: $storageIndex');
+
+      // ── Step 3: Download poster + embed steganography ──────────────────────
       final coverLocalPath = await _storage.downloadEventPosterToTemp(
         eventId: eventId,
         posterUrl: posterUrl,
-        tempDir: tempDir.path,
+        tempDir: tempPath,
       );
 
-      // C++ writes PNG directly via stb_image_write (no libpng dependency).
-      finalStegoPath = '${tempDir.path}/stego_${ticket.ticketID}.png';
+      // C++ writes PNG directly via stb_image_write.
+      final finalStegoPath = '$tempPath/stego_${ticket.ticketID}.png';
 
-      bool embedOk = false;
-
+      bool embedOk;
       if (coverLocalPath != null && await File(coverLocalPath).exists()) {
         embedOk = await _ffi.embedTicket(
           eventName: eventName,
@@ -176,7 +176,7 @@ class EventsNotifier extends Notifier<EventsState> {
           stegoPath: finalStegoPath,
         );
       } else {
-        // No poster available — let C++ generate a synthetic PNG cover.
+        debugPrint('⚠️  No poster available — using synthetic cover');
         embedOk = await _ffi.embedTicket(
           eventName: eventName,
           blockIndex: blockIndex,
@@ -184,33 +184,63 @@ class EventsNotifier extends Notifier<EventsState> {
         );
       }
 
-      if (!embedOk || !await File(finalStegoPath).exists()) {
-        throw Exception('Failed to create stego ticket image');
+      if (!embedOk) throw Exception('embedTicket returned false');
+      if (!await File(finalStegoPath).exists()) {
+        throw Exception('Stego file missing after embed: $finalStegoPath');
       }
+      debugPrint('✅ Stego image created: $finalStegoPath');
 
-      // ── Step 4: Upload stego PNG to Supabase ──────────────────────────────
-      final stegoFile = File(finalStegoPath);
-      await _storage.uploadStegoTicket(
+      // ── Step 4: Upload stego image to Supabase ─────────────────────────────
+      // Uses storageIndex (1-based) so download calls match the same index.
+      final stegoUrl = await _storage.uploadStegoTicket(
         eventId: eventId,
-        blockIndex: blockIndex,
-        stegoFile: stegoFile,
+        blockIndex: storageIndex,
+        stegoFile: File(finalStegoPath),
+      );
+      if (stegoUrl == null) {
+        throw Exception(
+            'uploadStegoTicket failed — file not persisted to storage');
+      }
+      debugPrint(
+          '✅ Stego ticket uploaded (storageIndex $storageIndex): $stegoUrl');
+
+      // ── Step 5: Locate + upload blockchain file ────────────────────────────
+      // FIX: The FFI typically writes to {appDocDir}/{safeName}.web3chain
+      // (NOT the /events/ subfolder).  We now search both locations so the
+      // upload never silently falls through.
+      final chainFile = await _findChainFile(
+        eventsDir: eventsDir,
+        appDocDir: appDocDir,
+        eventName: eventName,
       );
 
-      // ── Step 5: Upload blockchain file ────────────────────────────────────
-      final safeName = eventName.trim().replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-      final chainFile = File('$eventsDir/$safeName.web3chain');
-      if (await chainFile.exists()) {
-        await _storage.uploadBlockchainFile(
+      if (chainFile == null) {
+        // Non-fatal: warn loudly so the path mismatch is obvious in logs.
+        debugPrint('⚠️  Blockchain file not found in either:\n'
+            '    $eventsDir\n'
+            '    $appDocDir\n'
+            '    Verify that EventChainFFI writes to one of these paths.');
+      } else {
+        debugPrint('📂 Found blockchain file: ${chainFile.path}');
+        final chainUploaded = await _storage.uploadBlockchainFile(
           eventName: eventName,
           chainFile: chainFile,
         );
+        if (!chainUploaded) {
+          debugPrint('⚠️  Blockchain upload failed — local copy still intact.');
+        } else {
+          debugPrint('✅ Blockchain file uploaded: ${chainFile.path}');
+        }
       }
 
-      // ── Step 6: Save ticket record to Supabase ────────────────────────────
-      final insertData = {
+      // ── Step 6: Persist ticket record to Supabase DB ──────────────────────
+      // FIX: stegoUrl was obtained in Step 4 but was never added to the insert,
+      // causing a NOT NULL violation on the stego_url column and silently
+      // aborting every ticket insert.
+      await _supabase.from('tickets').insert({
         'event_id': eventId,
         'event_name': eventName,
-        'block_index': blockIndex,
+        'block_index': storageIndex, // 1-based, consistent with storage paths
         'ticket_id': ticket.ticketID,
         'owner_name': ticket.ownerName,
         'owner_id': ticket.ownerID,
@@ -218,36 +248,101 @@ class EventsNotifier extends Notifier<EventsState> {
         'price': ticket.price,
         'event_date': ticket.eventDate,
         'venue': ticket.venue,
-        'created_at': DateTime.now().toIso8601String(),
-      };
-
-      await _supabase.from('tickets').insert(insertData);
+        'stego_url': stegoUrl, // FIX: was missing — caused NOT NULL failure
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+      });
 
       refresh();
       state = state.copyWith(loading: false);
-      debugPrint('=== TICKET CREATION SUCCESS === Stego path: $finalStegoPath');
+      debugPrint('=== TICKET CREATION SUCCESS === $finalStegoPath');
       return (true, finalStegoPath);
-
     } catch (e, stack) {
-      debugPrint('=== TICKET CREATION FAILED ===');
-      debugPrint('Error: $e');
-      debugPrint('Stack: $stack');
+      debugPrint('=== TICKET CREATION FAILED ===\nError: $e\n$stack');
       state = state.copyWith(loading: false, error: e.toString());
       return (false, null);
     }
   }
 
-  Future<bool> validateEvent(String eventName) =>
-      _ffi.validateEvent(eventName);
+  Future<bool> validateEvent(String eventName) => _ffi.validateEvent(eventName);
 
   List<BlockModel> getChain(String eventName) {
     final size = _ffi.getEventSize(eventName);
-    final blocks = <BlockModel>[];
-    for (int i = 0; i < size; i++) {
-      final t = _ffi.getTicket(eventName, i);
-      if (t != null) blocks.add(BlockModel(index: i, ticket: t));
+    return [
+      for (int i = 0; i < size; i++)
+        if (_ffi.getTicket(eventName, i) case final t?)
+          BlockModel(index: i, ticket: t),
+    ];
+  }
+
+  // ── Private helpers ────────────────────────────────────────────────────────
+
+  /// Returns the shared local events directory (used for remote chain
+  /// downloads).  The FFI may write blockchain files to the parent
+  /// appDocDir instead — see [_findChainFile].
+  Future<String> _eventsDir() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final path = '${dir.path}/events';
+    await Directory(path).create(recursive: true);
+    return path;
+  }
+
+  /// Locates the `.web3chain` file for [eventName], searching:
+  ///   1. `{eventsDir}/{safeName}.web3chain`  (download target)
+  ///   2. `{appDocDir}/{safeName}.web3chain`  (FFI native write location)
+  ///   3. A case-insensitive scan of both directories for any `.web3chain`
+  ///      whose stem matches the safe name.
+  ///   4. The sole `.web3chain` in either directory if only one exists.
+  Future<File?> _findChainFile({
+    required String eventsDir,
+    required String appDocDir,
+    required String eventName,
+  }) async {
+    final safeName =
+        eventName.trim().replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+
+    // 1 & 2 — exact match in both candidate directories.
+    for (final dir in [eventsDir, appDocDir]) {
+      final f = File('$dir/$safeName.web3chain');
+      if (await f.exists()) {
+        debugPrint('📂 Chain file found (exact): ${f.path}');
+        return f;
+      }
     }
-    return blocks;
+
+    // 3 & 4 — directory scan fallback.
+    final allCandidates = <File>[];
+    for (final dirPath in [eventsDir, appDocDir]) {
+      final dir = Directory(dirPath);
+      if (!await dir.exists()) continue;
+      try {
+        final found = await dir
+            .list()
+            .where((e) => e is File && e.path.endsWith('.web3chain'))
+            .cast<File>()
+            .toList();
+        allCandidates.addAll(found);
+      } catch (e) {
+        debugPrint('⚠️  Error scanning $dirPath for chain file: $e');
+      }
+    }
+
+    // Case-insensitive stem match across all candidates.
+    for (final f in allCandidates) {
+      final stem = f.uri.pathSegments.last.replaceAll('.web3chain', '');
+      if (stem.toLowerCase() == safeName.toLowerCase()) {
+        debugPrint('📂 Chain file found (scan match): ${f.path}');
+        return f;
+      }
+    }
+
+    // Last resort: exactly one .web3chain across both dirs.
+    if (allCandidates.length == 1) {
+      debugPrint(
+          '📂 Chain file found (sole candidate): ${allCandidates.first.path}');
+      return allCandidates.first;
+    }
+
+    return null;
   }
 }
 

@@ -31,7 +31,8 @@ class VerificationResultScreen extends StatelessWidget {
     // Resolve ticket from FFI first, fall back to model from Supabase JSON
     final TicketModel? ticket = _resolveTicket();
 
-    final Color color = authentic ? AppTheme.authenticColor : AppTheme.tamperedColor;
+    final Color color =
+        authentic ? AppTheme.authenticColor : AppTheme.tamperedColor;
     final String label = authentic ? 'AUTHENTIC' : 'TAMPERED';
     final IconData icon = authentic ? Icons.verified : Icons.gpp_bad;
 
@@ -117,14 +118,15 @@ class _ResultBanner extends StatelessWidget {
   final Color color;
   final String label;
   final IconData icon;
-  const _ResultBanner({required this.color, required this.label, required this.icon});
+  const _ResultBanner(
+      {required this.color, required this.label, required this.icon});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 32),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: color, width: 3),
       ),
@@ -180,19 +182,19 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 12),
-    child: Align(
-      alignment: Alignment.centerLeft,
-      child: Text(
-        text,
-        style: AppTheme.sans(
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-          color: AppTheme.primaryColor,
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            text,
+            style: AppTheme.sans(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.primaryColor,
+            ),
+          ),
         ),
-      ),
-    ),
-  );
+      );
 }
 
 class _TicketDetailCard extends StatelessWidget {
@@ -218,10 +220,11 @@ class _TicketDetailCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppTheme.cardMidColor,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.primaryColor.withOpacity(0.3)),
+        border: Border.all(color: AppTheme.primaryColor.withValues(alpha: 0.3)),
       ),
       child: Column(
-        children: rows.map((r) => _DetailRow(label: r.$1, value: r.$2)).toList(),
+        children:
+            rows.map((r) => _DetailRow(label: r.$1, value: r.$2)).toList(),
       ),
     );
   }
@@ -287,30 +290,30 @@ class _DetailRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 8),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 100,
-          child: Text(
-            label,
-            style: AppTheme.sans(
-              fontSize: 13,
-              color: AppTheme.subTextColor,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 100,
+              child: Text(
+                label,
+                style: AppTheme.sans(
+                  fontSize: 13,
+                  color: AppTheme.subTextColor,
+                ),
+              ),
             ),
-          ),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: AppTheme.sans(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
+            Expanded(
+              child: Text(
+                value,
+                style: AppTheme.sans(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
-          ),
+          ],
         ),
-      ],
-    ),
-  );
+      );
 }
