@@ -1,4 +1,19 @@
 // lib/features/auth/register_screen.dart
+//
+// Registration flow — schema v2 notes:
+//
+//   • The profiles row is auto-created by the handle_new_user() Postgres
+//     trigger the moment auth.signUp() succeeds.  The trigger reads
+//     raw_user_meta_data for 'full_name' and 'role', so those MUST be
+//     passed in the signUp metadata (handled by AuthNotifier.register()).
+//
+//   • phone, bio, and avatar_url are NOT written by the trigger.
+//     AuthNotifier.register() issues a follow-up profiles UPDATE for them
+//     after signUp returns.
+//
+//   • profiles.role is a Postgres enum (public.user_role).
+//     The only valid values are 'owner' and 'customer', which map exactly
+//     to the Dart UserRole enum values via UserRole.name.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -43,6 +58,13 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   Future<void> _register() async {
     if (!_formKey.currentState!.validate()) return;
 
+    // AuthNotifier.register() must:
+    //   1. Call supabase.auth.signUp() with:
+    //        data: {'full_name': displayName, 'role': role.name}
+    //      → The handle_new_user trigger picks these up and creates profiles row.
+    //   2. If phone/bio/avatarUrl are provided, issue a follow-up:
+    //        supabase.from('profiles').update({...}).eq('id', user.id)
+    //      because the trigger only writes id, email, display_name, role.
     final ok = await ref.read(authProvider.notifier).register(
           email: _emailCtrl.text.trim(),
           password: _passCtrl.text,
@@ -61,18 +83,15 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Account created successfully! Please sign in.',
+            'Account created! Please sign in.',
             style: AppTheme.sans(fontSize: 13),
           ),
           backgroundColor: AppTheme.authenticColor,
           duration: const Duration(seconds: 3),
         ),
       );
-
-      // Navigate to Login Screen after successful registration
       await Future.delayed(const Duration(milliseconds: 800));
       if (!mounted) return;
-
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -118,7 +137,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Role Selection
+              // ── Role ───────────────────────────────────────────────────────
               _sectionLabel('I AM A...'),
               const SizedBox(height: 12),
               _RoleSelector(
@@ -127,9 +146,10 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
               ),
               const SizedBox(height: 28),
 
-              // Account Information Section
+              // ── Account information ────────────────────────────────────────
               _sectionLabel('ACCOUNT INFORMATION'),
               const SizedBox(height: 16),
+
               _fieldLabel('DISPLAY NAME'),
               _field(
                 _nameCtrl,
@@ -138,6 +158,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                     (v == null || v.trim().isEmpty) ? 'Required' : null,
               ),
               const SizedBox(height: 20),
+
               _fieldLabel('EMAIL'),
               _field(
                 _emailCtrl,
@@ -150,6 +171,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                 },
               ),
               const SizedBox(height: 20),
+
               _fieldLabel('PASSWORD'),
               _passwordField(
                 _passCtrl,
@@ -158,38 +180,41 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                 () => setState(() => _obscurePass = !_obscurePass),
                 validator: (v) {
                   if (v == null || v.isEmpty) return 'Required';
-                  if (v.length < 8) return 'Min 8 characters';
+                  if (v.length < 8) return 'Minimum 8 characters';
                   return null;
                 },
               ),
               const SizedBox(height: 20),
+
               _fieldLabel('CONFIRM PASSWORD'),
               _passwordField(
                 _confirmCtrl,
                 'Repeat password',
                 _obscureConfirm,
                 () => setState(() => _obscureConfirm = !_obscureConfirm),
-                validator: (v) {
-                  if (v != _passCtrl.text) return 'Passwords do not match';
-                  return null;
-                },
+                validator: (v) =>
+                    v != _passCtrl.text ? 'Passwords do not match' : null,
               ),
 
               const SizedBox(height: 32),
               const Divider(color: AppTheme.dividerColor),
               const SizedBox(height: 24),
 
-              // Profile Information Section
+              // ── Optional profile information ───────────────────────────────
+              // These fields are written to profiles via a follow-up UPDATE
+              // after signUp, since the handle_new_user trigger only fills
+              // id, email, display_name, and role.
               _sectionLabel('PROFILE INFORMATION (OPTIONAL)'),
               const SizedBox(height: 16),
+
               _fieldLabel('PHONE NUMBER'),
               _field(
                 _phoneCtrl,
                 '+265 999 123 456',
                 keyboardType: TextInputType.phone,
-                validator: (v) => null, // Optional
               ),
               const SizedBox(height: 20),
+
               _fieldLabel('BIO / ABOUT'),
               TextFormField(
                 controller: _bioCtrl,
@@ -201,20 +226,27 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   counterStyle:
                       AppTheme.sans(color: AppTheme.subTextColor, fontSize: 10),
                 ),
-                validator: (v) => null, // Optional
               ),
               const SizedBox(height: 20),
+
               _fieldLabel('AVATAR URL'),
               _field(
                 _avatarUrlCtrl,
                 'https://example.com/avatar.jpg',
                 keyboardType: TextInputType.url,
-                validator: (v) => null, // Optional
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return null;
+                  final uri = Uri.tryParse(v.trim());
+                  if (uri == null || !uri.hasScheme) {
+                    return 'Enter a valid URL or leave blank';
+                  }
+                  return null;
+                },
               ),
 
               const SizedBox(height: 40),
 
-              // Create Account Button
+              // ── Submit ─────────────────────────────────────────────────────
               SizedBox(
                 width: double.infinity,
                 height: 52,
@@ -261,8 +293,9 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                         TextSpan(
                           text: 'SIGN IN',
                           style: AppTheme.sans(
-                              color: AppTheme.primaryColor,
-                              fontWeight: FontWeight.w700),
+                            color: AppTheme.primaryColor,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ],
                     ),
@@ -276,6 +309,8 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       ),
     );
   }
+
+  // ── Helper builders ──────────────────────────────────────────────────────
 
   Widget _sectionLabel(String text) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
@@ -373,7 +408,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       );
 }
 
-// Role selector widget (unchanged)
+// ── Role Selector ─────────────────────────────────────────────────────────────
 class _RoleSelector extends StatelessWidget {
   final UserRole selected;
   final ValueChanged<UserRole> onChanged;
@@ -389,7 +424,6 @@ class _RoleSelector extends StatelessWidget {
           icon: Icons.manage_accounts_outlined,
           label: 'EVENT OWNER',
           sub: 'Create & manage events',
-          accent: const Color(0xFF7C4DFF),
         ),
         const SizedBox(width: 12),
         _tile(
@@ -397,7 +431,6 @@ class _RoleSelector extends StatelessWidget {
           icon: Icons.person_outline,
           label: 'CUSTOMER',
           sub: 'Browse & buy tickets',
-          accent: AppTheme.primaryColor,
         ),
       ],
     );
@@ -408,9 +441,9 @@ class _RoleSelector extends StatelessWidget {
     required IconData icon,
     required String label,
     required String sub,
-    required Color accent,
   }) {
     final isSelected = selected == role;
+    const accent = AppTheme.primaryColor;
     return Expanded(
       child: GestureDetector(
         onTap: () => onChanged(role),

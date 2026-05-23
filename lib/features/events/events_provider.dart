@@ -1,72 +1,112 @@
 // lib/features/events/events_provider.dart
 
-import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../core/ffi_bridge/eventchain_ffi.dart';
 import '../../core/models/ticket_model.dart';
+import '../../core/models/ticket_record.dart';
+import '../../core/services/supabase_service.dart';
 import '../../core/services/supabase_storage_service.dart';
 
-// ── State ─────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// ownerEventsProvider
+//
+// Fetches the signed-in owner's events, joined with their ticket-type rows so
+// the events list can show sold / remaining counts without a second query.
+// ─────────────────────────────────────────────────────────────────────────────
+final ownerEventsProvider =
+    FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
+  final svc = SupabaseService.instance;
+  final userId = svc.currentUserId;
+  if (userId == null) return [];
+
+  final res = await svc.events
+      .select(
+        '*, event_ticket_types(ticket_type, price, quantity_available, quantity_sold)',
+      )
+      .eq('owner_id', userId)
+      .order('created_at', ascending: false);
+
+  return List<Map<String, dynamic>>.from(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EventsState
+// ─────────────────────────────────────────────────────────────────────────────
 class EventsState {
-  
+  /// Names of blockchain events loaded locally on this device.
   final List<String> eventNames;
   final bool loading;
-  final String? error;
+
+  /// User-facing message (non-technical). Null when everything is fine.
+  final String? message;
+
+  /// Events that are currently syncing with the cloud.
   final Set<String> syncing;
 
   const EventsState({
     this.eventNames = const [],
     this.loading = false,
-    this.error,
+    this.message,
     this.syncing = const {},
   });
 
   EventsState copyWith({
     List<String>? eventNames,
     bool? loading,
-    String? error,
-    bool clearError = false,
+    String? message,
+    bool clearMessage = false,
     Set<String>? syncing,
   }) =>
       EventsState(
         eventNames: eventNames ?? this.eventNames,
         loading: loading ?? this.loading,
-        error: clearError ? null : error ?? this.error,
+        message: clearMessage ? null : message ?? this.message,
         syncing: syncing ?? this.syncing,
       );
 }
 
-// ── Notifier ──────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// EventsNotifier
+// ─────────────────────────────────────────────────────────────────────────────
 class EventsNotifier extends Notifier<EventsState> {
   final _ffi = EventChainFFI.instance;
   final _storage = SupabaseStorageService.instance;
-  final _supabase = Supabase.instance.client;
+  final _svc = SupabaseService.instance;
 
   @override
   EventsState build() => const EventsState(loading: true);
 
+  // ── Local chain list ───────────────────────────────────────────────────────
+
+  /// Refreshes the list of locally-known event names from the FFI layer.
   void refresh() {
     try {
       state = state.copyWith(
         eventNames: _ffi.listEvents(),
         loading: false,
-        clearError: true,
+        clearMessage: true,
       );
     } catch (e) {
-      state = state.copyWith(loading: false, error: e.toString());
+      state = state.copyWith(
+        loading: false,
+        message: 'Could not load your events. Please try again.',
+      );
     }
   }
 
+  // ── Remote chain sync ──────────────────────────────────────────────────────
+
+  /// Downloads the blockchain file for [eventName] from the cloud and loads
+  /// it into the local FFI instance.
   Future<bool> loadRemoteChain(String eventName) async {
     state = state.copyWith(syncing: {...state.syncing, eventName});
     try {
-      final eventsDir = await _eventsDir();
+      final eventsDir = await _localEventsDir();
       final ok = await _storage.downloadBlockchainFile(
         eventName: eventName,
         localEventsDir: eventsDir,
@@ -82,60 +122,103 @@ class EventsNotifier extends Notifier<EventsState> {
     } catch (e) {
       state = state.copyWith(
         syncing: state.syncing.where((e) => e != eventName).toSet(),
-        error: e.toString(),
+        message: 'Could not download event data. Check your connection.',
       );
       return false;
     }
   }
 
+  // ── Ticket prices & capacity ───────────────────────────────────────────────
+
+  /// Returns { 'General': 5000.0, 'VIP': 15000.0, … } for [eventId].
   Future<Map<String, double>> getTicketPrices(String eventId) async {
     try {
-      final res = await _supabase
-          .from('event_ticket_types')
-          .select('ticket_type, price')
+      final res = await _svc.eventTicketTypes
+          .select('ticket_type, price, quantity_available, quantity_sold')
           .eq('event_id', eventId);
-
       return {
         for (final row in List<Map<String, dynamic>>.from(res))
           row['ticket_type'] as String: (row['price'] as num).toDouble(),
       };
     } catch (e) {
-      debugPrint('❌ Failed to load ticket prices: $e');
+      debugPrint('❌ getTicketPrices: $e');
       return {};
     }
   }
 
-  /// Creates a ticket, embeds it via steganography, and syncs everything to
-  /// Supabase storage.  Returns `(true, localStegoPath)` on full success.
+  /// Returns true if at least one slot remains for [ticketType] in [eventId].
+  /// Queries the DB directly so the check is always live.
+  Future<bool> _hasCapacity({
+    required String eventId,
+    required String ticketType,
+  }) async {
+    try {
+      final res = await _svc.eventTicketTypes
+          .select('quantity_available, quantity_sold')
+          .eq('event_id', eventId)
+          .eq('ticket_type', ticketType)
+          .single();
+      final available = (res['quantity_available'] as num).toInt();
+      final sold = (res['quantity_sold'] as num).toInt();
+      return (available - sold) > 0;
+    } catch (e) {
+      debugPrint('❌ _hasCapacity: $e');
+      return false;
+    }
+  }
+
+  // ── Add ticket ─────────────────────────────────────────────────────────────
+
+  /// Full ticket-creation pipeline:
+  ///   1. Capacity check
+  ///   2. Mine a new block in the local C++ blockchain
+  ///   3. Embed ticket data steganographically into the event poster
+  ///   4. Upload the stego image to Supabase Storage
+  ///   5. Upload the updated blockchain file to Supabase Storage
+  ///   6. Insert the ticket row into the Supabase database
+  ///
+  /// [blockIndex] in the DB uses the raw 0-based C++ chain index.
+  /// [storageIndex] (blockIndex + 1) is used only for Storage file paths.
+  ///
+  /// Returns (true, localStegoPath) on full success.
   Future<(bool success, String? stegoLocalPath)> addTicket({
     required String eventName,
     required String eventId,
     required String posterUrl,
     required String ownerName,
-    required String ownerID,
-    required String eventDate,
-    required String venue,
+    required String ownerID, // FFI / stego payload only
+    required String eventDate, // FFI / stego payload only
+    required String venue, // FFI / stego payload only
     required String ticketType,
     required double price,
   }) async {
-    state = state.copyWith(loading: true, clearError: true);
+    state = state.copyWith(loading: true, clearMessage: true);
 
     try {
-      debugPrint('=== TICKET CREATION START ===');
-      debugPrint(
-          'Event: $eventName | ID: $eventId | Type: $ticketType | Price: MWK $price');
+      // ── Guard: auth session ──────────────────────────────────────────────
+      final authUser = _svc.auth.currentUser;
+      if (authUser == null) throw Exception('You are not signed in.');
 
-      // FIX: resolve BOTH directories up-front so we can search all candidate
-      // locations when looking for the blockchain file later.
+      // ── Guard: ticket availability ───────────────────────────────────────
+      final hasSlot = await _hasCapacity(
+        eventId: eventId,
+        ticketType: ticketType,
+      );
+      if (!hasSlot) {
+        throw Exception(
+          'Sorry, there are no $ticketType tickets left for this event.',
+        );
+      }
+
+      // ── Directories ──────────────────────────────────────────────────────
       final appDocDir = (await getApplicationDocumentsDirectory()).path;
       final eventsDir = '$appDocDir/events';
       await Directory(eventsDir).create(recursive: true);
-
       final tempPath = (await getTemporaryDirectory()).path;
 
-      // ── Step 1: Build ticket model ─────────────────────────────────────────
+      // ── Step 1: Build the FFI ticket model ───────────────────────────────
       final ticket = TicketModel(
-        ticketID: const Uuid().v4().substring(0, 8).toUpperCase(),
+        ticketID: 'TKT-${DateTime.now().millisecondsSinceEpoch}',
         eventName: eventName,
         eventDate: eventDate,
         venue: venue,
@@ -145,29 +228,30 @@ class EventsNotifier extends Notifier<EventsState> {
         price: price,
       );
 
-      // ── Step 2: Mine block in C++ ──────────────────────────────────────────
+      // ── Step 2: Mine the block locally ───────────────────────────────────
       final mined = await _ffi.addTicket(eventName, ticket);
-      if (!mined) throw Exception('Mining failed in native layer');
+      if (!mined)
+        throw Exception(
+            'Something went wrong while creating your ticket. Please try again.');
 
-      // blockIndex is 0-based (C++ chain index).
-      // storageIndex is 1-based so filenames match: ticket_1, ticket_2, …
+      // blockIndex is 0-based (matches C++ chain and DB block_index column).
+      // storageIndex is 1-based — used only for Storage file names.
       final blockIndex = _ffi.getEventSize(eventName) - 1;
-      final storageIndex = blockIndex + 1;
+      final storageIndex = blockIndex + 1; // ticket_1.png, ticket_2.png, …
 
       debugPrint(
           '✅ Block mined — blockIndex: $blockIndex  storageIndex: $storageIndex');
 
-      // ── Step 3: Download poster + embed steganography ──────────────────────
+      // ── Step 3: Embed ticket data into the event poster ──────────────────
       final coverLocalPath = await _storage.downloadEventPosterToTemp(
         eventId: eventId,
         posterUrl: posterUrl,
         tempDir: tempPath,
       );
 
-      // C++ writes PNG directly via stb_image_write.
       final finalStegoPath = '$tempPath/stego_${ticket.ticketID}.png';
-
       bool embedOk;
+
       if (coverLocalPath != null && await File(coverLocalPath).exists()) {
         embedOk = await _ffi.embedTicket(
           eventName: eventName,
@@ -184,84 +268,85 @@ class EventsNotifier extends Notifier<EventsState> {
         );
       }
 
-      if (!embedOk) throw Exception('embedTicket returned false');
+      if (!embedOk)
+        throw Exception(
+            'Could not generate your ticket image. Please try again.');
       if (!await File(finalStegoPath).exists()) {
-        throw Exception('Stego file missing after embed: $finalStegoPath');
+        throw Exception('Ticket image was not saved. Please try again.');
       }
-      debugPrint('✅ Stego image created: $finalStegoPath');
 
-      // ── Step 4: Upload stego image to Supabase ─────────────────────────────
-      // Uses storageIndex (1-based) so download calls match the same index.
+      // ── Step 4: Upload stego image to Supabase Storage ───────────────────
       final stegoUrl = await _storage.uploadStegoTicket(
         eventId: eventId,
-        blockIndex: storageIndex,
+        blockIndex: storageIndex, // 1-based for storage paths
         stegoFile: File(finalStegoPath),
       );
       if (stegoUrl == null) {
         throw Exception(
-            'uploadStegoTicket failed — file not persisted to storage');
+            'Could not upload your ticket image. Please check your connection.');
       }
-      debugPrint(
-          '✅ Stego ticket uploaded (storageIndex $storageIndex): $stegoUrl');
 
-      // ── Step 5: Locate + upload blockchain file ────────────────────────────
-      // FIX: The FFI typically writes to {appDocDir}/{safeName}.web3chain
-      // (NOT the /events/ subfolder).  We now search both locations so the
-      // upload never silently falls through.
+      // ── Step 5: Upload updated blockchain file to cloud ──────────────────
       final chainFile = await _findChainFile(
         eventsDir: eventsDir,
         appDocDir: appDocDir,
         eventName: eventName,
       );
-
       if (chainFile == null) {
-        // Non-fatal: warn loudly so the path mismatch is obvious in logs.
-        debugPrint('⚠️  Blockchain file not found in either:\n'
-            '    $eventsDir\n'
-            '    $appDocDir\n'
-            '    Verify that EventChainFFI writes to one of these paths.');
+        // Non-fatal — ticket is still created; blockchain backup will retry.
+        debugPrint('⚠️  Blockchain file not found — local copy still intact.');
+        state = state.copyWith(
+          message:
+              'Your ticket was created. The cloud backup will sync next time you open the event.',
+        );
       } else {
-        debugPrint('📂 Found blockchain file: ${chainFile.path}');
         final chainUploaded = await _storage.uploadBlockchainFile(
           eventName: eventName,
           chainFile: chainFile,
         );
         if (!chainUploaded) {
-          debugPrint('⚠️  Blockchain upload failed — local copy still intact.');
-        } else {
-          debugPrint('✅ Blockchain file uploaded: ${chainFile.path}');
+          debugPrint('⚠️  Blockchain upload failed — local copy intact.');
+          state = state.copyWith(
+            message:
+                'Your ticket was created. Cloud backup will retry on next launch.',
+          );
         }
       }
 
-      // ── Step 6: Persist ticket record to Supabase DB ──────────────────────
-      // FIX: stegoUrl was obtained in Step 4 but was never added to the insert,
-      // causing a NOT NULL violation on the stego_url column and silently
-      // aborting every ticket insert.
-      await _supabase.from('tickets').insert({
+      // ── Step 6: Insert ticket row into the database ──────────────────────
+      // block_index stores the 0-based C++ chain index so it lines up with
+      // FFI lookups. storageIndex is only for Storage file-name resolution.
+      await _svc.tickets.insert({
         'event_id': eventId,
-        'event_name': eventName,
-        'block_index': storageIndex, // 1-based, consistent with storage paths
         'ticket_id': ticket.ticketID,
+        'block_index':
+            blockIndex, // 0-based — matches getTicket(eventName, blockIndex)
+        'owner_id': authUser.id,
         'owner_name': ticket.ownerName,
-        'owner_id': ticket.ownerID,
         'ticket_type': ticket.ticketType,
         'price': ticket.price,
-        'event_date': ticket.eventDate,
-        'venue': ticket.venue,
-        'stego_url': stegoUrl, // FIX: was missing — caused NOT NULL failure
-        'created_at': DateTime.now().toUtc().toIso8601String(),
+        'stego_url': stegoUrl,
+        'is_sold': false,
       });
 
       refresh();
       state = state.copyWith(loading: false);
-      debugPrint('=== TICKET CREATION SUCCESS === $finalStegoPath');
       return (true, finalStegoPath);
+    } on PostgrestException catch (e) {
+      debugPrint('❌ DB error: ${e.message}');
+      state = state.copyWith(
+        loading: false,
+        message: 'Could not save your ticket. Please try again.',
+      );
+      return (false, null);
     } catch (e, stack) {
-      debugPrint('=== TICKET CREATION FAILED ===\nError: $e\n$stack');
-      state = state.copyWith(loading: false, error: e.toString());
+      debugPrint('❌ addTicket failed: $e\n$stack');
+      state = state.copyWith(loading: false, message: e.toString());
       return (false, null);
     }
   }
+
+  // ── Chain queries ──────────────────────────────────────────────────────────
 
   Future<bool> validateEvent(String eventName) => _ffi.validateEvent(eventName);
 
@@ -276,22 +361,15 @@ class EventsNotifier extends Notifier<EventsState> {
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
-  /// Returns the shared local events directory (used for remote chain
-  /// downloads).  The FFI may write blockchain files to the parent
-  /// appDocDir instead — see [_findChainFile].
-  Future<String> _eventsDir() async {
+  Future<String> _localEventsDir() async {
     final dir = await getApplicationDocumentsDirectory();
     final path = '${dir.path}/events';
     await Directory(path).create(recursive: true);
     return path;
   }
 
-  /// Locates the `.web3chain` file for [eventName], searching:
-  ///   1. `{eventsDir}/{safeName}.web3chain`  (download target)
-  ///   2. `{appDocDir}/{safeName}.web3chain`  (FFI native write location)
-  ///   3. A case-insensitive scan of both directories for any `.web3chain`
-  ///      whose stem matches the safe name.
-  ///   4. The sole `.web3chain` in either directory if only one exists.
+  /// Locates the `.web3chain` file for [eventName], trying multiple strategies
+  /// because the C++ layer and the Dart download target may use different paths.
   Future<File?> _findChainFile({
     required String eventsDir,
     required String appDocDir,
@@ -303,10 +381,7 @@ class EventsNotifier extends Notifier<EventsState> {
     // 1 & 2 — exact match in both candidate directories.
     for (final dir in [eventsDir, appDocDir]) {
       final f = File('$dir/$safeName.web3chain');
-      if (await f.exists()) {
-        debugPrint('📂 Chain file found (exact): ${f.path}');
-        return f;
-      }
+      if (await f.exists()) return f;
     }
 
     // 3 & 4 — directory scan fallback.
@@ -322,26 +397,16 @@ class EventsNotifier extends Notifier<EventsState> {
             .toList();
         allCandidates.addAll(found);
       } catch (e) {
-        debugPrint('⚠️  Error scanning $dirPath for chain file: $e');
+        debugPrint('⚠️  Error scanning $dirPath: $e');
       }
     }
 
-    // Case-insensitive stem match across all candidates.
     for (final f in allCandidates) {
       final stem = f.uri.pathSegments.last.replaceAll('.web3chain', '');
-      if (stem.toLowerCase() == safeName.toLowerCase()) {
-        debugPrint('📂 Chain file found (scan match): ${f.path}');
-        return f;
-      }
+      if (stem.toLowerCase() == safeName.toLowerCase()) return f;
     }
 
-    // Last resort: exactly one .web3chain across both dirs.
-    if (allCandidates.length == 1) {
-      debugPrint(
-          '📂 Chain file found (sole candidate): ${allCandidates.first.path}');
-      return allCandidates.first;
-    }
-
+    if (allCandidates.length == 1) return allCandidates.first;
     return null;
   }
 }

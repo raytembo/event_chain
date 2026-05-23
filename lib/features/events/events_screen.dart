@@ -1,32 +1,21 @@
 // lib/features/events/events_screen.dart
+
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:uuid/uuid.dart';
 import 'package:latlong2/latlong.dart';
 
-import '../../core/ffi_bridge/eventchain_ffi.dart';
+import '../../core/models/ticket_record.dart';
+import '../../core/services/supabase_service.dart';
 import '../../core/services/supabase_storage_service.dart';
 import '../../shared/theme/app_theme.dart';
 import 'events_provider.dart';
 import 'event_detail_screen.dart';
 import 'event_location_picker.dart';
 
-final ownerEventsProvider =
-    FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
-  final supabase = Supabase.instance.client;
-  final userId = supabase.auth.currentUser?.id;
-  if (userId == null) return [];
-  final res = await supabase
-      .from('events')
-      .select()
-      .eq('owner_id', userId)
-      .order('created_at', ascending: false);
-  return List<Map<String, dynamic>>.from(res);
-});
+// ownerEventsProvider lives in events_provider.dart — do not redeclare here.
 
 class EventsScreen extends ConsumerStatefulWidget {
   const EventsScreen({super.key});
@@ -47,6 +36,7 @@ class _EventsScreenState extends ConsumerState<EventsScreen> {
   @override
   Widget build(BuildContext context) {
     final eventsAsync = ref.watch(ownerEventsProvider);
+
     return Scaffold(
       backgroundColor: AppTheme.cardColor,
       body: CustomScrollView(
@@ -61,6 +51,7 @@ class _EventsScreenState extends ConsumerState<EventsScreen> {
               IconButton(
                 icon: const Icon(Icons.refresh_rounded,
                     color: AppTheme.primaryColor),
+                tooltip: 'Refresh',
                 onPressed: () {
                   ref.invalidate(ownerEventsProvider);
                   ref.read(eventsProvider.notifier).refresh();
@@ -124,13 +115,18 @@ class _EventsScreenState extends ConsumerState<EventsScreen> {
     );
   }
 
+  // ── Navigation ─────────────────────────────────────────────────────────────
+
   Future<void> _openEvent(Map<String, dynamic> ev) async {
     final eventName = ev['event_name'] as String;
+
+    // Download the blockchain if it is not already loaded locally.
     final loaded = ref.read(eventsProvider).eventNames.contains(eventName);
     if (!loaded) {
       await ref.read(eventsProvider.notifier).loadRemoteChain(eventName);
     }
     if (!mounted) return;
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -139,7 +135,13 @@ class _EventsScreenState extends ConsumerState<EventsScreen> {
           eventId: ev['id'] as String,
           posterUrl: ev['poster_url'] as String? ?? '',
           venue: ev['venue'] as String?,
-          eventDate: _formatDate(ev['event_date']),
+          eventDate: ev['event_date'] as String?,
+          latitude: ev['latitude'] != null
+              ? (ev['latitude'] as num).toDouble()
+              : null,
+          longitude: ev['longitude'] != null
+              ? (ev['longitude'] as num).toDouble()
+              : null,
         ),
       ),
     ).then((_) {
@@ -161,16 +163,18 @@ class _EventsScreenState extends ConsumerState<EventsScreen> {
     });
   }
 
+  // ── Delete ─────────────────────────────────────────────────────────────────
+
   Future<void> _confirmDelete(Map<String, dynamic> event) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.cardColor,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Delete Event?', style: AppTheme.merri(fontSize: 18)),
+        title: Text('Remove this event?', style: AppTheme.merri(fontSize: 18)),
         content: Text(
-          'This will permanently remove the event, all tickets, payments, '
-          'blockchain file, and uploaded images.\n\nThis cannot be undone.',
+          'This will permanently delete the event, all tickets, payments, '
+          'and the uploaded images. This cannot be undone.',
           style: AppTheme.sans(fontSize: 14, color: AppTheme.subTextColor),
         ),
         actions: [
@@ -181,81 +185,63 @@ class _EventsScreenState extends ConsumerState<EventsScreen> {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.tamperedColor,
-            ),
+                backgroundColor: AppTheme.tamperedColor),
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text(
-              'Delete',
-              style: AppTheme.sans(
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-              ),
-            ),
+            child: Text('Delete',
+                style: AppTheme.sans(
+                    fontWeight: FontWeight.w700, color: Colors.white)),
           ),
         ],
       ),
     );
+
     if (confirmed != true || !mounted) return;
+
     final scaffold = ScaffoldMessenger.of(context);
-    final supabase = Supabase.instance.client;
+    final svc = SupabaseService.instance;
     final eventId = event['id'] as String;
     final eventName = event['event_name'] as String;
+
     try {
       scaffold.showSnackBar(const SnackBar(
-        content: Text('Deleting event…'),
+        content: Text('Removing event…'),
         duration: Duration(seconds: 2),
       ));
-      await supabase.from('events').delete().eq('id', eventId);
 
-      // Delegate storage cleanup to the service so bucket names stay in one place.
-      final storage = SupabaseStorageService.instance;
-      await storage.deleteBlockchainFile(eventName);
-      await storage.deleteEventPoster(eventId);
+      // The ON DELETE CASCADE on event_ticket_types and ON DELETE RESTRICT on
+      // tickets means we delete tickets first, then the event.
+      await svc.tickets.delete().eq('event_id', eventId);
+      await svc.events.delete().eq('id', eventId);
+
+      // Clean up all cloud storage assets in parallel.
+      await SupabaseStorageService.instance.deleteAllAssetsForEvent(
+        eventId: eventId,
+        eventName: eventName,
+      );
+
       ref.invalidate(ownerEventsProvider);
       ref.read(eventsProvider.notifier).refresh();
+
       scaffold.showSnackBar(SnackBar(
         content:
-            Text('Event deleted.', style: AppTheme.sans(color: Colors.black)),
+            Text('Event removed.', style: AppTheme.sans(color: Colors.black)),
         backgroundColor: AppTheme.authenticColor,
         behavior: SnackBarBehavior.floating,
       ));
     } catch (e) {
       scaffold.showSnackBar(SnackBar(
-        content: Text('Error: $e', style: AppTheme.sans()),
+        content: Text('Could not delete event: $e',
+            style: AppTheme.sans(color: Colors.white)),
         backgroundColor: AppTheme.tamperedColor,
         behavior: SnackBarBehavior.floating,
       ));
     }
   }
-
-  static String _formatDate(dynamic raw) {
-    if (raw == null) return '';
-    try {
-      final dt = DateTime.parse(raw.toString()).toLocal();
-      return '${dt.day.toString().padLeft(2, '0')} '
-          '${_month(dt.month)} ${dt.year}';
-    } catch (_) {
-      return raw.toString();
-    }
-  }
-
-  static String _month(int m) => const [
-        '',
-        'Jan',
-        'Feb',
-        'Mar',
-        'Apr',
-        'May',
-        'Jun',
-        'Jul',
-        'Aug',
-        'Sep',
-        'Oct',
-        'Nov',
-        'Dec'
-      ][m];
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// _EventCard
+// ─────────────────────────────────────────────────────────────────────────────
 class _EventCard extends StatelessWidget {
   final Map<String, dynamic> event;
   final VoidCallback onTap;
@@ -273,8 +259,7 @@ class _EventCard extends StatelessWidget {
     if (raw == null) return '';
     try {
       final dt = DateTime.parse(raw.toString()).toLocal();
-      return '${dt.day.toString().padLeft(2, '0')} '
-          '${const [
+      const months = [
         '',
         'Jan',
         'Feb',
@@ -288,8 +273,8 @@ class _EventCard extends StatelessWidget {
         'Oct',
         'Nov',
         'Dec'
-      ][dt.month]}'
-          ' ${dt.year}';
+      ];
+      return '${dt.day.toString().padLeft(2, '0')} ${months[dt.month]} ${dt.year}';
     } catch (_) {
       return raw.toString();
     }
@@ -301,6 +286,7 @@ class _EventCard extends StatelessWidget {
     final name = event['event_name'] as String? ?? '';
     final date = _formatDate(event['event_date']);
     final venue = event['venue'] as String? ?? '';
+
     return Material(
       color: const Color(0xFF1A1A1A),
       borderRadius: BorderRadius.circular(16),
@@ -310,6 +296,7 @@ class _EventCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ── Poster image ───────────────────────────────────────────────
             Stack(
               children: [
                 if (posterUrl != null && posterUrl.isNotEmpty)
@@ -339,6 +326,8 @@ class _EventCard extends StatelessWidget {
                 ),
               ],
             ),
+
+            // ── Event info + action buttons ────────────────────────────────
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
               child: Row(
@@ -355,13 +344,10 @@ class _EventCard extends StatelessWidget {
                             const Icon(Icons.calendar_today_rounded,
                                 size: 11, color: AppTheme.subTextColor),
                             const SizedBox(width: 5),
-                            Text(
-                              date,
-                              style: AppTheme.sans(
-                                fontSize: 11,
-                                color: AppTheme.subTextColor,
-                              ),
-                            ),
+                            Text(date,
+                                style: AppTheme.sans(
+                                    fontSize: 11,
+                                    color: AppTheme.subTextColor)),
                             const SizedBox(width: 12),
                             const Icon(Icons.location_on_outlined,
                                 size: 11, color: AppTheme.subTextColor),
@@ -370,9 +356,7 @@ class _EventCard extends StatelessWidget {
                               child: Text(
                                 venue,
                                 style: AppTheme.sans(
-                                  fontSize: 11,
-                                  color: AppTheme.subTextColor,
-                                ),
+                                    fontSize: 11, color: AppTheme.subTextColor),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -387,14 +371,14 @@ class _EventCard extends StatelessWidget {
                         icon: Icons.edit_outlined,
                         color: AppTheme.primaryColor,
                         onTap: onEdit,
-                        tooltip: 'Edit',
+                        tooltip: 'Edit event',
                       ),
                       const SizedBox(width: 4),
                       _IconBtn(
                         icon: Icons.delete_outline_rounded,
                         color: AppTheme.tamperedColor,
                         onTap: onDelete,
-                        tooltip: 'Delete',
+                        tooltip: 'Remove event',
                       ),
                     ],
                   ),
@@ -417,6 +401,9 @@ class _EventCard extends StatelessWidget {
       );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// _IconBtn
+// ─────────────────────────────────────────────────────────────────────────────
 class _IconBtn extends StatelessWidget {
   final IconData icon;
   final Color color;
@@ -447,16 +434,16 @@ class _IconBtn extends StatelessWidget {
       );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// _TicketEntry — holds controllers for one ticket-type row in the form
+// ─────────────────────────────────────────────────────────────────────────────
 class _TicketEntry {
   final String type;
   final TextEditingController priceCtrl;
   final TextEditingController qtyCtrl;
 
-  _TicketEntry({
-    required this.type,
-    double price = 0,
-    int qty = 0,
-  })  : priceCtrl = TextEditingController(
+  _TicketEntry({required this.type, double price = 0, int qty = 0})
+      : priceCtrl = TextEditingController(
           text: price > 0 ? price.toStringAsFixed(2) : '',
         ),
         qtyCtrl = TextEditingController(
@@ -472,6 +459,9 @@ class _TicketEntry {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// _EventFormSheet — create or edit an event
+// ─────────────────────────────────────────────────────────────────────────────
 class _EventFormSheet extends ConsumerStatefulWidget {
   final Map<String, dynamic>? eventToEdit;
   const _EventFormSheet({this.eventToEdit});
@@ -538,8 +528,7 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
 
   Future<void> _loadExistingPrices(String eventId) async {
     try {
-      final rows = await Supabase.instance.client
-          .from('event_ticket_types')
+      final rows = await SupabaseService.instance.eventTicketTypes
           .select()
           .eq('event_id', eventId);
       for (final row in List<Map<String, dynamic>>.from(rows)) {
@@ -552,7 +541,7 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
             (row['price'] as num).toDouble().toStringAsFixed(2);
         entry.qtyCtrl.text = (row['quantity_available'] as int).toString();
       }
-      setState(() {});
+      if (mounted) setState(() {});
     } catch (e) {
       debugPrint('_loadExistingPrices: $e');
     }
@@ -581,97 +570,104 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
     final picked = await Navigator.push<LatLng?>(
       context,
       MaterialPageRoute(
-        builder: (_) => EventLocationPickerScreen(
-          initialLocation: _selectedLocation,
-        ),
+        builder: (_) =>
+            EventLocationPickerScreen(initialLocation: _selectedLocation),
       ),
     );
-    if (picked != null) {
-      setState(() => _selectedLocation = picked);
-    }
+    if (picked != null) setState(() => _selectedLocation = picked);
   }
 
   Future<void> _submit() async {
     setState(() => _triedSubmit = true);
     if (!_formKey.currentState!.validate()) return;
+
     if (_eventDate == null) {
-      _snack('Please select an event date', error: true);
+      _snack('Please choose a date for your event.', error: true);
       return;
     }
     if (!_isEdit && _posterFile == null) {
-      _snack('Please select an event poster', error: true);
+      _snack('Please add a poster image for your event.', error: true);
       return;
     }
     final activeEntries =
         _entries.where((e) => e.price > 0 && e.qty > 0).toList();
     if (activeEntries.isEmpty) {
-      _snack('Set price & quantity for at least one ticket type', error: true);
+      _snack('Set a price and quantity for at least one ticket type.',
+          error: true);
       return;
     }
+
     setState(() => _submitting = true);
-    final supabase = Supabase.instance.client;
-    final userId = supabase.auth.currentUser?.id;
+    final svc = SupabaseService.instance;
+
     try {
       final dateIso = _eventDate!.toUtc().toIso8601String();
+
       if (_isEdit) {
+        // ── Update existing event ──────────────────────────────────────────
         final eventId = widget.eventToEdit!['id'] as String;
-        await supabase.from('events').update({
-          'event_name': _nameCtrl.text.trim(),
-          'event_date': dateIso,
-          'venue': _venueCtrl.text.trim(),
-          'description': _descCtrl.text.trim(),
-          'latitude': _selectedLocation?.latitude,
-          'longitude': _selectedLocation?.longitude,
-        }).eq('id', eventId);
+        await svc.updateEvent(
+          eventId,
+          eventName: _nameCtrl.text.trim(),
+          eventDate: _eventDate,
+          venue: _venueCtrl.text.trim(),
+          description: _descCtrl.text.trim(),
+          latitude: _selectedLocation?.latitude,
+          longitude: _selectedLocation?.longitude,
+        );
         for (final entry in activeEntries) {
-          await supabase.from('event_ticket_types').upsert(
-            {
-              'event_id': eventId,
-              'ticket_type': entry.type,
-              'price': entry.price,
-              'quantity_available': entry.qty,
-            },
-            onConflict: 'event_id,ticket_type',
+          await svc.upsertTicketType(
+            eventId: eventId,
+            ticketType: TicketTypeX.fromString(entry.type),
+            price: entry.price,
+            quantityAvailable: entry.qty,
           );
         }
       } else {
-        final eventId = const Uuid().v4();
+        // ── Create new event ───────────────────────────────────────────────
+        // Upload poster first — the event row needs the URL.
+        final tempId = DateTime.now().millisecondsSinceEpoch.toString();
         final posterUrl =
             await SupabaseStorageService.instance.uploadEventPoster(
-          eventId: eventId,
+          eventId: tempId, // temporary ID for the upload path
           imageFile: _posterFile!,
         );
-        if (posterUrl == null || (posterUrl).isEmpty) {
-          throw Exception('Poster upload failed');
+        if (posterUrl == null || posterUrl.isEmpty) {
+          throw Exception(
+              'Your poster could not be uploaded. Please try again.');
         }
-        await supabase.from('events').insert({
-          'id': eventId,
-          'owner_id': userId,
-          'event_name': _nameCtrl.text.trim(),
-          'event_date': dateIso,
-          'venue': _venueCtrl.text.trim(),
-          'description': _descCtrl.text.trim(),
-          'poster_url': posterUrl,
-          'latitude': _selectedLocation?.latitude,
-          'longitude': _selectedLocation?.longitude,
-          'is_public': true,
-          'created_at': DateTime.now().toUtc().toIso8601String(),
-        });
+
+        final newEvent = await svc.createEvent(
+          eventName: _nameCtrl.text.trim(),
+          description: _descCtrl.text.isEmpty ? null : _descCtrl.text.trim(),
+          eventDate: _eventDate,
+          venue: _venueCtrl.text.trim(),
+          latitude: _selectedLocation?.latitude,
+          longitude: _selectedLocation?.longitude,
+          isPublic: true,
+          posterUrl: posterUrl,
+        );
+        if (newEvent == null) {
+          throw Exception('Could not create your event. Please try again.');
+        }
+
+        final eventId = newEvent['id'] as String;
         for (final entry in activeEntries) {
-          await supabase.from('event_ticket_types').insert({
-            'event_id': eventId,
-            'ticket_type': entry.type,
-            'price': entry.price,
-            'quantity_available': entry.qty,
-          });
+          await svc.upsertTicketType(
+            eventId: eventId,
+            ticketType: TicketTypeX.fromString(entry.type),
+            price: entry.price,
+            quantityAvailable: entry.qty,
+          );
         }
       }
+
       if (mounted) {
         Navigator.pop(context);
         _snack(_isEdit ? 'Event updated.' : 'Event created!');
       }
     } catch (e) {
-      if (mounted) _snack('Error: $e', error: true);
+      if (mounted) _snack(e.toString(), error: true);
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -679,12 +675,8 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
 
   void _snack(String msg, {bool error = false}) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(
-        msg,
-        style: AppTheme.sans(
-          color: error ? Colors.white : Colors.black,
-        ),
-      ),
+      content: Text(msg,
+          style: AppTheme.sans(color: error ? Colors.white : Colors.black)),
       backgroundColor: error ? AppTheme.tamperedColor : AppTheme.primaryColor,
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -714,6 +706,7 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Drag handle
               Center(
                 child: Container(
                   width: 36,
@@ -732,12 +725,14 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
               const SizedBox(height: 4),
               Text(
                 _isEdit
-                    ? 'Update event info and ticket pricing.'
+                    ? 'Update your event details and ticket pricing.'
                     : 'Fill in the details to publish your event.',
                 style:
                     AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor),
               ),
               const SizedBox(height: 24),
+
+              // ── Poster picker (create only) ──────────────────────────────
               if (!_isEdit) ...[
                 const _Label('Event Poster'),
                 const SizedBox(height: 8),
@@ -769,21 +764,16 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
                                   right: 10,
                                   child: Container(
                                     padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 5,
-                                    ),
+                                        horizontal: 10, vertical: 5),
                                     decoration: BoxDecoration(
                                       color:
                                           Colors.black.withValues(alpha: 0.65),
                                       borderRadius: BorderRadius.circular(6),
                                     ),
-                                    child: Text(
-                                      'Change',
-                                      style: AppTheme.sans(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
+                                    child: Text('Change',
+                                        style: AppTheme.sans(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600)),
                                   ),
                                 ),
                               ],
@@ -809,17 +799,14 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
                               Text(
                                 'Tap to upload event poster',
                                 style: AppTheme.sans(
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white70,
-                                ),
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white70),
                               ),
                               const SizedBox(height: 4),
                               Text(
                                 'JPG or PNG recommended',
                                 style: AppTheme.sans(
-                                  fontSize: 11,
-                                  color: AppTheme.subTextColor,
-                                ),
+                                    fontSize: 11, color: AppTheme.subTextColor),
                               ),
                             ],
                           ),
@@ -827,6 +814,8 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
                 ),
                 const SizedBox(height: 20),
               ],
+
+              // ── Event Name ───────────────────────────────────────────────
               const _Label('Event Name'),
               const SizedBox(height: 6),
               TextFormField(
@@ -847,10 +836,14 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
                 },
               ),
               const SizedBox(height: 16),
+
+              // ── Date ─────────────────────────────────────────────────────
               const _Label('Event Date'),
               const SizedBox(height: 8),
               _DateField(date: _eventDate, onTap: _pickDate),
               const SizedBox(height: 16),
+
+              // ── Venue ────────────────────────────────────────────────────
               const _Label('Venue'),
               const SizedBox(height: 6),
               TextFormField(
@@ -860,13 +853,14 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
                 decoration: const InputDecoration(
                   hintText: 'e.g. Kamuzu Stadium',
                 ),
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) return 'Venue is required';
-                  return null;
-                },
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Venue is required'
+                    : null,
               ),
               const SizedBox(height: 16),
-              const _Label('Event Location'),
+
+              // ── Location picker ──────────────────────────────────────────
+              const _Label('Event Location (optional)'),
               const SizedBox(height: 8),
               GestureDetector(
                 onTap: _pickLocation,
@@ -891,7 +885,7 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
                           _selectedLocation != null
                               ? '${_selectedLocation!.latitude.toStringAsFixed(5)}, '
                                   '${_selectedLocation!.longitude.toStringAsFixed(5)}'
-                              : 'Tap to choose location on map',
+                              : 'Tap to pin location on the map',
                           style: AppTheme.sans(
                             fontSize: 14,
                             color: _selectedLocation != null
@@ -900,11 +894,15 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
                           ),
                         ),
                       ),
+                      const Icon(Icons.chevron_right_rounded,
+                          color: AppTheme.subTextColor),
                     ],
                   ),
                 ),
               ),
               const SizedBox(height: 16),
+
+              // ── Description ──────────────────────────────────────────────
               const _Label('Description (optional)'),
               const SizedBox(height: 6),
               TextFormField(
@@ -917,29 +915,28 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
                 ),
               ),
               const SizedBox(height: 8),
+
+              // ── Ticket pricing ───────────────────────────────────────────
               Row(
                 children: [
                   Text('Ticket Pricing', style: AppTheme.merri(fontSize: 14)),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Container(
-                      height: 1,
-                      color: const Color(0xFF2A2A2A),
-                    ),
+                    child: Container(height: 1, color: const Color(0xFF2A2A2A)),
                   ),
                 ],
               ),
               const SizedBox(height: 4),
               Text(
-                'Set price 0 or qty 0 to disable a ticket type.',
-                style: AppTheme.sans(
-                  fontSize: 11,
-                  color: AppTheme.subTextColor,
-                ),
+                'Leave price or quantity as 0 to disable a ticket type.',
+                style:
+                    AppTheme.sans(fontSize: 11, color: AppTheme.subTextColor),
               ),
               const SizedBox(height: 12),
               ..._entries.map((entry) => _TicketPriceRow(entry: entry)),
               const SizedBox(height: 28),
+
+              // ── Submit ───────────────────────────────────────────────────
               SizedBox(
                 width: double.infinity,
                 height: 52,
@@ -950,12 +947,10 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
                           width: 20,
                           height: 20,
                           child: CircularProgressIndicator(
-                            color: Colors.black,
-                            strokeWidth: 2.5,
-                          ),
+                              color: Colors.black, strokeWidth: 2.5),
                         )
                       : Text(
-                          _isEdit ? 'Update Event' : 'Create Event',
+                          _isEdit ? 'Save Changes' : 'Create Event',
                           style: AppTheme.sans(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
@@ -973,22 +968,20 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Small reusable form widgets
+// ─────────────────────────────────────────────────────────────────────────────
+
 class _TicketPriceRow extends StatelessWidget {
   final _TicketEntry entry;
   const _TicketPriceRow({required this.entry});
 
-  Color _color(String type) {
-    switch (type.toLowerCase()) {
-      case 'vip':
-        return const Color(0xFFFFD700);
-      case 'backstage':
-        return const Color(0xFFFF6D00);
-      case 'student':
-        return const Color(0xFF69F0AE);
-      default:
-        return AppTheme.primaryColor;
-    }
-  }
+  Color _color(String type) => switch (type.toLowerCase()) {
+        'vip' => const Color(0xFFFFD700),
+        'backstage' => const Color(0xFFFF6D00),
+        'student' => const Color(0xFF69F0AE),
+        _ => AppTheme.primaryColor,
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -1103,7 +1096,6 @@ class _Label extends StatelessWidget {
 class _DateField extends StatelessWidget {
   final DateTime? date;
   final VoidCallback onTap;
-
   const _DateField({required this.date, required this.onTap});
 
   static String _fmt(DateTime dt) {
@@ -1143,11 +1135,9 @@ class _DateField extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(
-              Icons.calendar_today_outlined,
-              size: 18,
-              color: has ? AppTheme.primaryColor : AppTheme.subTextColor,
-            ),
+            Icon(Icons.calendar_today_outlined,
+                size: 18,
+                color: has ? AppTheme.primaryColor : AppTheme.subTextColor),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
@@ -1168,6 +1158,10 @@ class _DateField extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Empty / error states
+// ─────────────────────────────────────────────────────────────────────────────
+
 class _EmptyState extends StatelessWidget {
   final VoidCallback onCreateTapped;
   const _EmptyState({required this.onCreateTapped});
@@ -1185,11 +1179,9 @@ class _EmptyState extends StatelessWidget {
                   color: AppTheme.primaryColor.withValues(alpha: 0.08),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(
-                  Icons.event_rounded,
-                  size: 52,
-                  color: AppTheme.primaryColor.withValues(alpha: 0.6),
-                ),
+                child: Icon(Icons.event_rounded,
+                    size: 52,
+                    color: AppTheme.primaryColor.withValues(alpha: 0.6)),
               ),
               const SizedBox(height: 24),
               Text('No Events Yet', style: AppTheme.merri(fontSize: 22)),
@@ -1206,13 +1198,9 @@ class _EmptyState extends StatelessWidget {
                 child: ElevatedButton.icon(
                   onPressed: onCreateTapped,
                   icon: const Icon(Icons.add_rounded, size: 18),
-                  label: Text(
-                    'Create Event',
-                    style: AppTheme.sans(
-                      fontWeight: FontWeight.w700,
-                      color: Colors.black,
-                    ),
-                  ),
+                  label: Text('Create Event',
+                      style: AppTheme.sans(
+                          fontWeight: FontWeight.w700, color: Colors.black)),
                 ),
               ),
             ],
@@ -1237,11 +1225,9 @@ class _ErrorState extends StatelessWidget {
               const SizedBox(height: 16),
               Text('Something went wrong', style: AppTheme.merri(fontSize: 18)),
               const SizedBox(height: 8),
-              Text(
-                message,
-                textAlign: TextAlign.center,
-                style: AppTheme.sans(color: AppTheme.subTextColor),
-              ),
+              Text(message,
+                  textAlign: TextAlign.center,
+                  style: AppTheme.sans(color: AppTheme.subTextColor)),
             ],
           ),
         ),

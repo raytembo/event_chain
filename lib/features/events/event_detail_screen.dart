@@ -1,15 +1,13 @@
 // lib/features/events/event_detail_screen.dart
 //
-// Shows an owner's event: chain validity, ticket list, and lets them add
-// new tickets. Includes interactive location display and format sharing.
-//
-// Format sharing is limited to PNG and BMP — the only two lossless formats
-// the C++ steganography layer can produce. No external image-processing
-// package is required.
+// Shows an owner's event: chain integrity status, all issued tickets, and the
+// button to issue more. Handles ticket sharing as PNG or BMP.
 
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -25,6 +23,10 @@ class EventDetailScreen extends ConsumerStatefulWidget {
   final String eventId;
   final String posterUrl;
   final String? venue;
+
+  /// Raw ISO-8601 timestamptz string from events.event_date.
+  /// Displayed as a formatted date; also passed to CreateTicketScreen for the
+  /// steganographic payload.
   final String? eventDate;
   final double? latitude;
   final double? longitude;
@@ -45,8 +47,8 @@ class EventDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
-  bool _validating = false;
-  bool? _isValid;
+  bool _checking = false;
+  bool? _chainOk;
   List<BlockModel> _blocks = [];
 
   @override
@@ -61,93 +63,71 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
     });
   }
 
-  Future<void> _validate() async {
+  Future<void> _checkChain() async {
     setState(() {
-      _validating = true;
-      _isValid = null;
+      _checking = true;
+      _chainOk = null;
     });
     final ok =
         await ref.read(eventsProvider.notifier).validateEvent(widget.eventName);
     setState(() {
-      _validating = false;
-      _isValid = ok;
+      _checking = false;
+      _chainOk = ok;
     });
   }
 
-  /// Default share — always PNG (C++ outputs PNG natively; no conversion needed).
+  // ── Sharing ────────────────────────────────────────────────────────────────
+
+  /// Share a ticket as PNG — tries the already-uploaded cloud copy first.
   Future<void> _shareTicket(BlockModel block) async {
-    final ffi = EventChainFFI.instance;
-    final storage = SupabaseStorageService.instance;
     final tempDir = await getTemporaryDirectory();
+    _showBrief('Preparing your ticket image…');
 
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content:
-            Text('Preparing ticket image…', style: AppTheme.sans(fontSize: 13)),
-        backgroundColor: AppTheme.cardColor,
-      ),
-    );
-
-    // Try the already-uploaded PNG from Supabase first.
-    final localPath = await storage.downloadStegoTicketToTemp(
+    // storageIndex is 1-based (ticket_1, ticket_2, …).
+    final storageIndex = block.index + 1;
+    final localPath =
+        await SupabaseStorageService.instance.downloadStegoTicketToTemp(
       eventId: widget.eventId,
-      blockIndex: block.index + 1, // ← was: block.index (off-by-one)
+      blockIndex: storageIndex,
       tempDir: tempDir.path,
     );
 
-    // If not available, re-embed directly to PNG via C++.
     final sharePath =
         localPath ?? '${tempDir.path}/stego_${block.ticket.ticketID}.png';
     if (localPath == null) {
-      await ffi.embedTicket(
+      // Re-embed locally as a fallback.
+      await EventChainFFI.instance.embedTicket(
         eventName: widget.eventName,
-        blockIndex: block.index,
-        stegoPath:
-            sharePath, // .png extension → C++ writes PNG via stb_image_write
+        blockIndex: block.index, // 0-based for FFI
+        stegoPath: sharePath,
       );
     }
 
     if (!mounted) return;
-
     if (await File(sharePath).exists()) {
       await Share.shareXFiles(
         [XFile(sharePath)],
         subject: 'Your ticket: ${block.ticket.eventName}',
       );
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not prepare ticket image.')),
-      );
+      _showBrief('Could not prepare the ticket image.');
     }
   }
 
-  /// Format-specific share — delegates format selection to the C++ FFI layer
-  /// by choosing the output path extension. PNG and BMP are the only options
-  /// because they are the only lossless formats the C++ layer supports.
-  ///
-  /// No Dart-side image-processing package is used.
+  /// Share as a specific format (PNG or BMP).
   Future<void> _shareTicketAsFormat(BlockModel block, int format) async {
-    final ffi = EventChainFFI.instance;
-    final storage = SupabaseStorageService.instance;
     final tempDir = await getTemporaryDirectory();
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Preparing ticket…', style: AppTheme.sans(fontSize: 13)),
-        backgroundColor: AppTheme.cardColor,
-      ),
-    );
+    _showBrief('Preparing your ticket…');
 
     final ext = format == ImageFormat.bmp ? 'bmp' : 'png';
     final outputPath = '${tempDir.path}/stego_${block.ticket.ticketID}.$ext';
 
-    // For PNG, prefer the already-uploaded copy from Supabase.
+    // For PNG, prefer the cloud copy.
     if (format == ImageFormat.png) {
-      final localPath = await storage.downloadStegoTicketToTemp(
+      final localPath =
+          await SupabaseStorageService.instance.downloadStegoTicketToTemp(
         eventId: widget.eventId,
-        blockIndex: block.index,
+        blockIndex: block.index + 1, // 1-based storage path
         tempDir: tempDir.path,
       );
       if (localPath != null && await File(localPath).exists()) {
@@ -160,29 +140,64 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
       }
     }
 
-    // For BMP (or PNG fallback): ask C++ to re-embed to the desired extension.
-    final ok = await ffi.embedTicket(
+    // BMP or PNG fallback: re-embed via C++.
+    final ok = await EventChainFFI.instance.embedTicket(
       eventName: widget.eventName,
-      blockIndex: block.index,
-      stegoPath: outputPath, // C++ infers format from extension: .png or .bmp
+      blockIndex: block.index, // 0-based for FFI
+      stegoPath: outputPath,
     );
 
     if (!mounted) return;
-
     if (ok && await File(outputPath).exists()) {
       await Share.shareXFiles(
         [XFile(outputPath)],
         subject: 'Your ${block.ticket.eventName} ticket (${ext.toUpperCase()})',
       );
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not prepare ticket image.')),
-      );
+      _showBrief('Could not prepare the ticket image.');
     }
   }
 
+  void _showBrief(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg, style: AppTheme.sans(fontSize: 13)),
+      backgroundColor: AppTheme.cardColor,
+    ));
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  static String _formatDate(String? raw) {
+    if (raw == null || raw.isEmpty) return '';
+    try {
+      final dt = DateTime.parse(raw).toLocal();
+      const months = [
+        '',
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec'
+      ];
+      return '${dt.day.toString().padLeft(2, '0')} ${months[dt.month]} ${dt.year}';
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
+    // Skip genesis block (index 0) — it has no ticket data.
     final tickets = _blocks.where((b) => b.index > 0).toList();
 
     return Scaffold(
@@ -199,7 +214,7 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
           child: Container(height: 1, color: AppTheme.dividerColor),
         ),
         actions: [
-          if (_validating)
+          if (_checking)
             const Padding(
               padding: EdgeInsets.all(16),
               child: SizedBox(
@@ -211,20 +226,20 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
             )
           else
             IconButton(
-              tooltip: 'Validate chain',
+              tooltip: 'Check ticket integrity',
               icon: Icon(
-                _isValid == null
+                _chainOk == null
                     ? Icons.shield_outlined
-                    : _isValid!
+                    : _chainOk!
                         ? Icons.shield
                         : Icons.shield_moon,
-                color: _isValid == null
+                color: _chainOk == null
                     ? Colors.white
-                    : _isValid!
+                    : _chainOk!
                         ? AppTheme.authenticColor
                         : AppTheme.tamperedColor,
               ),
-              onPressed: _validate,
+              onPressed: _checkChain,
             ),
         ],
       ),
@@ -245,14 +260,14 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
         ).then((_) => _loadBlocks()),
         icon: const Icon(Icons.add),
         label: Text(
-          'ADD TICKET',
+          'Issue Ticket',
           style: AppTheme.sans(
               fontSize: 13, fontWeight: FontWeight.w700, color: Colors.black),
         ),
       ),
       body: Column(
         children: [
-          // Poster
+          // ── Poster ──────────────────────────────────────────────────────
           if (widget.posterUrl.isNotEmpty)
             SizedBox(
               height: 160,
@@ -281,31 +296,32 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
               ),
             ),
 
-          // Chain validity banner
-          if (_isValid != null)
+          // ── Chain integrity banner ───────────────────────────────────────
+          if (_chainOk != null)
             AnimatedContainer(
               duration: const Duration(milliseconds: 400),
               width: double.infinity,
               color:
-                  _isValid! ? AppTheme.authenticColor : AppTheme.tamperedColor,
+                  _chainOk! ? AppTheme.authenticColor : AppTheme.tamperedColor,
               padding: const EdgeInsets.symmetric(vertical: 10),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(
-                    _isValid! ? Icons.link : Icons.link_off,
+                    _chainOk!
+                        ? Icons.verified_outlined
+                        : Icons.warning_amber_rounded,
                     color: Colors.black,
                     size: 18,
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    _isValid!
-                        ? 'CHAIN INTACT — ALL BLOCKS VALID'
-                        : 'TAMPER DETECTED',
+                    _chainOk!
+                        ? 'All tickets are genuine — nothing has been tampered with'
+                        : 'Warning: ticket data may have been altered',
                     style: AppTheme.sans(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
-                      letterSpacing: 1.2,
                       color: Colors.black,
                     ),
                   ),
@@ -313,20 +329,21 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
               ),
             ),
 
+          // ── Stats row ────────────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
             child: Row(
               children: [
                 _StatChip(value: '${_blocks.length}', label: 'BLOCKS'),
                 const SizedBox(width: 12),
-                _StatChip(value: '${tickets.length}', label: 'TICKETS'),
+                _StatChip(value: '${tickets.length}', label: 'TICKETS ISSUED'),
               ],
             ),
           ),
 
           const Divider(height: 1),
 
-          // Event info row
+          // ── Event info ───────────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Column(
@@ -337,8 +354,10 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
                     const Icon(Icons.calendar_today_rounded,
                         size: 14, color: AppTheme.subTextColor),
                     const SizedBox(width: 6),
-                    Text(widget.eventDate ?? '',
-                        style: AppTheme.sans(fontSize: 13)),
+                    Text(
+                      _formatDate(widget.eventDate),
+                      style: AppTheme.sans(fontSize: 13),
+                    ),
                     const Spacer(),
                     const Icon(Icons.location_on_outlined,
                         size: 14, color: AppTheme.subTextColor),
@@ -352,35 +371,55 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                if (widget.latitude != null && widget.longitude != null)
-                  GestureDetector(
-                    onTap: () {},
-                    child: Row(
-                      children: [
-                        const Icon(Icons.map,
-                            size: 16, color: AppTheme.primaryColor),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${widget.latitude!.toStringAsFixed(5)}, ${widget.longitude!.toStringAsFixed(5)}',
-                          style: AppTheme.sans(
-                              fontSize: 13, color: AppTheme.primaryColor),
+                // ── Mini map (only when coordinates are available) ─────────
+                if (widget.latitude != null && widget.longitude != null) ...[
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: SizedBox(
+                      height: 140,
+                      child: FlutterMap(
+                        options: MapOptions(
+                          initialCenter:
+                              LatLng(widget.latitude!, widget.longitude!),
+                          initialZoom: 15,
+                          interactionOptions: const InteractionOptions(
+                            flags: InteractiveFlag.none,
+                          ),
                         ),
-                        const Spacer(),
-                        Text(
-                          'View on Map',
-                          style: AppTheme.sans(
-                              fontSize: 12, color: AppTheme.primaryColor),
-                        ),
-                      ],
+                        children: [
+                          TileLayer(
+                            urlTemplate:
+                                'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                            userAgentPackageName: 'com.example.eventchain',
+                          ),
+                          MarkerLayer(
+                            markers: [
+                              Marker(
+                                point:
+                                    LatLng(widget.latitude!, widget.longitude!),
+                                width: 40,
+                                height: 40,
+                                child: const Icon(
+                                  Icons.location_on,
+                                  color: Color(0xFFFF1744),
+                                  size: 40,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
+                ],
               ],
             ),
           ),
 
           const Divider(height: 1),
 
+          // ── Ticket list ──────────────────────────────────────────────────
           Expanded(
             child: tickets.isEmpty
                 ? Center(
@@ -394,7 +433,7 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
                             style: AppTheme.merri(
                                 fontSize: 16, color: AppTheme.subTextColor)),
                         const SizedBox(height: 4),
-                        Text('Tap + to add the first one.',
+                        Text('Tap "Issue Ticket" to create the first one.',
                             style: AppTheme.sans(
                                 fontSize: 13, color: AppTheme.subTextColor)),
                       ],
@@ -406,8 +445,8 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
                     itemBuilder: (_, i) => _TicketCard(
                       block: tickets[i],
                       onShare: () => _shareTicket(tickets[i]),
-                      onShareAsFormat: (format) =>
-                          _shareTicketAsFormat(tickets[i], format),
+                      onShareAsFormat: (fmt) =>
+                          _shareTicketAsFormat(tickets[i], fmt),
                     ),
                   ),
           ),
@@ -417,7 +456,9 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
   }
 }
 
-// ── Stat Chip ─────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// _StatChip
+// ─────────────────────────────────────────────────────────────────────────────
 class _StatChip extends StatelessWidget {
   final String value;
   final String label;
@@ -451,7 +492,9 @@ class _StatChip extends StatelessWidget {
       );
 }
 
-// ── Ticket Card ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// _TicketCard
+// ─────────────────────────────────────────────────────────────────────────────
 class _TicketCard extends StatelessWidget {
   final BlockModel block;
   final VoidCallback onShare;
@@ -463,21 +506,13 @@ class _TicketCard extends StatelessWidget {
     required this.onShareAsFormat,
   });
 
-  Color _typeColor(String type) {
-    switch (type.toLowerCase()) {
-      case 'vip':
-        return const Color(0xFFFFD700);
-      case 'backstage':
-        return const Color(0xFFFF6D00);
-      case 'student':
-        return const Color(0xFF69F0AE);
-      default:
-        return AppTheme.primaryColor;
-    }
-  }
+  Color _typeColor(String type) => switch (type.toLowerCase()) {
+        'vip' => const Color(0xFFFFD700),
+        'backstage' => const Color(0xFFFF6D00),
+        'student' => const Color(0xFF69F0AE),
+        _ => AppTheme.primaryColor,
+      };
 
-  /// Format menu — limited to PNG and BMP, the only lossless formats
-  /// the C++ steganography layer can produce without an external package.
   void _showFormatMenu(
       BuildContext context, ValueChanged<int> onShareAsFormat) {
     showModalBottomSheet(
@@ -493,14 +528,12 @@ class _TicketCard extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Share Ticket As',
-                style:
-                    AppTheme.merri(fontSize: 18, fontWeight: FontWeight.w700),
-              ),
+              Text('Share Ticket As',
+                  style: AppTheme.merri(
+                      fontSize: 18, fontWeight: FontWeight.w700)),
               const SizedBox(height: 4),
               Text(
-                'Only lossless formats are supported to preserve hidden ticket data.',
+                'Only lossless formats work — compressed formats destroy the hidden data.',
                 style:
                     AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor),
               ),
@@ -509,7 +542,7 @@ class _TicketCard extends StatelessWidget {
                 icon: Icons.image_outlined,
                 label: 'PNG (Recommended)',
                 subtitle:
-                    'Lossless · preserves hidden payload · smallest lossless size',
+                    'Lossless · preserves hidden data · smallest file size',
                 onTap: () {
                   Navigator.pop(ctx);
                   onShareAsFormat(ImageFormat.png);
@@ -518,7 +551,7 @@ class _TicketCard extends StatelessWidget {
               _FormatOption(
                 icon: Icons.image,
                 label: 'BMP',
-                subtitle: 'Lossless · uncompressed · largest file size',
+                subtitle: 'Lossless · uncompressed · larger file size',
                 onTap: () {
                   Navigator.pop(ctx);
                   onShareAsFormat(ImageFormat.bmp);
@@ -546,6 +579,7 @@ class _TicketCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Colour accent bar
           Container(
             height: 4,
             decoration: BoxDecoration(
@@ -561,20 +595,13 @@ class _TicketCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        t.ticketType.toUpperCase(),
-                        style: AppTheme.sans(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.8,
-                            color: typeColor),
-                      ),
+                    Text(
+                      t.ticketType.toUpperCase(),
+                      style: AppTheme.sans(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.8,
+                          color: typeColor),
                     ),
                     const Spacer(),
                     Text('BLOCK #${block.index}',
@@ -615,7 +642,7 @@ class _TicketCard extends StatelessWidget {
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
-                        '${t.ownerName}  ·  ${t.ownerID}',
+                        t.ownerName,
                         style: AppTheme.sans(
                             fontSize: 11, color: AppTheme.subTextColor),
                         overflow: TextOverflow.ellipsis,
@@ -691,7 +718,9 @@ class _TicketCard extends StatelessWidget {
   }
 }
 
-// ── Format Option ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// _FormatOption
+// ─────────────────────────────────────────────────────────────────────────────
 class _FormatOption extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -706,15 +735,13 @@ class _FormatOption extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(icon, color: AppTheme.primaryColor),
-      title: Text(label,
-          style: AppTheme.sans(fontSize: 14, fontWeight: FontWeight.w600)),
-      subtitle: Text(subtitle,
-          style: AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor)),
-      onTap: onTap,
-      contentPadding: EdgeInsets.zero,
-    );
-  }
+  Widget build(BuildContext context) => ListTile(
+        leading: Icon(icon, color: AppTheme.primaryColor),
+        title: Text(label,
+            style: AppTheme.sans(fontSize: 14, fontWeight: FontWeight.w600)),
+        subtitle: Text(subtitle,
+            style: AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor)),
+        onTap: onTap,
+        contentPadding: EdgeInsets.zero,
+      );
 }

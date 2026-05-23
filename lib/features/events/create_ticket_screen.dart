@@ -1,11 +1,12 @@
 // lib/features/events/create_ticket_screen.dart
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:gal/gal.dart';
 
+import '../../core/services/supabase_service.dart';
 import '../../shared/theme/app_theme.dart';
 import 'events_provider.dart';
 
@@ -13,7 +14,12 @@ class CreateTicketScreen extends ConsumerStatefulWidget {
   final String prefillEventName;
   final String eventId;
   final String posterUrl;
+
+  /// Venue — stored in events.venue, embedded into the stego payload.
   final String? prefillVenue;
+
+  /// ISO-8601 string from events.event_date — embedded into the stego payload
+  /// only, never written to the tickets table.
   final String? prefillEventDate;
 
   const CreateTicketScreen({
@@ -32,56 +38,97 @@ class CreateTicketScreen extends ConsumerStatefulWidget {
 class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _ownerNameCtrl;
-  late final TextEditingController _ownerIDCtrl;
+
+  /// UUID from auth.currentUser — written to tickets.owner_id (FK).
+  /// Never editable by the user.
+  late final String _authOwnerID;
+
   final TextEditingController _priceCtrl = TextEditingController();
 
   String _ticketType = 'General';
   bool _submitting = false;
 
-  // Auto-fill prices from Supabase event_ticket_types
+  /// Prices auto-filled from event_ticket_types.
   Map<String, double> _prices = {};
+
+  /// Available slots per ticket type — shown on the selector chips.
+  Map<String, int> _remaining = {};
 
   static const _ticketTypes = ['General', 'VIP', 'Backstage', 'Student'];
 
   @override
   void initState() {
     super.initState();
-    final user = Supabase.instance.client.auth.currentUser;
+    final user = SupabaseService.instance.auth.currentUser;
     _ownerNameCtrl = TextEditingController(
-        text: user?.userMetadata?['full_name'] as String? ?? '');
-    _ownerIDCtrl = TextEditingController(text: user?.id ?? '');
-
-    _loadTicketPrices();
-  }
-
-  Future<void> _loadTicketPrices() async {
-    final prices =
-        await ref.read(eventsProvider.notifier).getTicketPrices(widget.eventId);
-    setState(() => _prices = prices);
-
-    if (_prices.containsKey(_ticketType)) {
-      _priceCtrl.text = _prices[_ticketType]!.toStringAsFixed(2);
-    }
+      text: user?.userMetadata?['full_name'] as String? ?? '',
+    );
+    _authOwnerID = user?.id ?? '';
+    _loadPricesAndCapacity();
   }
 
   @override
   void dispose() {
     _ownerNameCtrl.dispose();
-    _ownerIDCtrl.dispose();
     _priceCtrl.dispose();
     super.dispose();
   }
 
+  // ── Data loading ───────────────────────────────────────────────────────────
+
+  Future<void> _loadPricesAndCapacity() async {
+    try {
+      final rows = await SupabaseService.instance.eventTicketTypes
+          .select('ticket_type, price, quantity_available, quantity_sold')
+          .eq('event_id', widget.eventId);
+
+      final prices = <String, double>{};
+      final remaining = <String, int>{};
+
+      for (final row in List<Map<String, dynamic>>.from(rows)) {
+        final type = row['ticket_type'] as String;
+        prices[type] = (row['price'] as num).toDouble();
+        final available = (row['quantity_available'] as num).toInt();
+        final sold = (row['quantity_sold'] as num).toInt();
+        remaining[type] = (available - sold).clamp(0, available);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _prices = prices;
+        _remaining = remaining;
+      });
+
+      // Auto-fill price for the default ticket type.
+      if (_prices.containsKey(_ticketType)) {
+        _priceCtrl.text = _prices[_ticketType]!.toStringAsFixed(2);
+      }
+    } catch (e) {
+      debugPrint('❌ _loadPricesAndCapacity: $e');
+    }
+  }
+
+  // ── Submission ─────────────────────────────────────────────────────────────
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+
+    final slotsLeft = _remaining[_ticketType] ?? 0;
+    if (slotsLeft <= 0) {
+      _showSnack('No $_ticketType tickets are available for this event.',
+          isError: true);
+      return;
+    }
 
     setState(() => _submitting = true);
 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => const _MiningDialog(),
+      builder: (_) => const _IssuingDialog(),
     );
+
+    final eventDate = _formatEventDate(widget.prefillEventDate);
 
     final (bool success, String? stegoPath) =
         await ref.read(eventsProvider.notifier).addTicket(
@@ -89,26 +136,60 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
               eventId: widget.eventId,
               posterUrl: widget.posterUrl,
               ownerName: _ownerNameCtrl.text.trim(),
-              ownerID: _ownerIDCtrl.text.trim(),
-              eventDate: widget.prefillEventDate ??
-                  '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}',
+              ownerID: _authOwnerID,
+              eventDate: eventDate,
               venue: widget.prefillVenue ?? 'TBD',
               ticketType: _ticketType,
               price: double.parse(_priceCtrl.text.trim()),
             );
 
     if (!mounted) return;
-    Navigator.pop(context); // close mining dialog
-
+    Navigator.pop(context); // close the issuing dialog
     setState(() => _submitting = false);
 
     if (success && stegoPath != null) {
+      _loadPricesAndCapacity(); // refresh remaining counts
       _showSuccessOptions(stegoPath);
     } else {
-      final err = ref.read(eventsProvider).error ?? 'Unknown error';
-      _showSnack('Failed: $err', isError: true);
+      final msg = ref.read(eventsProvider).message ?? 'Something went wrong.';
+      _showSnack(msg, isError: true);
     }
   }
+
+  /// Formats a raw ISO-8601 timestamptz into a readable date for the stego
+  /// payload (e.g. "25 Dec 2025").
+  static String _formatEventDate(String? raw) {
+    if (raw == null || raw.isEmpty) {
+      final now = DateTime.now();
+      return '${now.day.toString().padLeft(2, '0')} '
+          '${_monthName(now.month)} ${now.year}';
+    }
+    try {
+      final dt = DateTime.parse(raw).toLocal();
+      return '${dt.day.toString().padLeft(2, '0')} '
+          '${_monthName(dt.month)} ${dt.year}';
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  static String _monthName(int m) => const [
+        '',
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
+      ][m];
+
+  // ── Success / error UI ─────────────────────────────────────────────────────
 
   void _showSuccessOptions(String stegoPath) {
     showDialog(
@@ -117,11 +198,11 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
         backgroundColor: AppTheme.cardColor,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(
-          'Ticket Created!',
+          'Ticket Issued!',
           style: AppTheme.merri(fontSize: 20, fontWeight: FontWeight.w700),
         ),
         content: const Text(
-          'Your on-chain ticket has been mined and uploaded.\n\n'
+          'Your ticket has been created and saved to the blockchain.\n\n'
           'What would you like to do with the ticket image?',
         ),
         actions: [
@@ -133,11 +214,11 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
               Navigator.pop(ctx);
               try {
                 await Gal.putImage(stegoPath);
-                _showSnack('Ticket saved to your gallery!', isError: false);
+                _showSnack('Ticket saved to your gallery!');
               } on GalException catch (e) {
-                _showSnack('Failed to save: ${e.type}', isError: true);
+                _showSnack('Could not save: ${e.type}', isError: true);
               } catch (e) {
-                _showSnack('Failed to save: $e', isError: true);
+                _showSnack('Could not save: $e', isError: true);
               }
             },
           ),
@@ -170,6 +251,8 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     ));
   }
 
+  // ── Build ──────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -181,7 +264,7 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
           icon: const Icon(Icons.close, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text('New Ticket',
+        title: Text('Issue New Ticket',
             style: AppTheme.merri(fontSize: 18, fontWeight: FontWeight.w700)),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
@@ -193,6 +276,7 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
         child: ListView(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
           children: [
+            // ── Event (read-only) ──────────────────────────────────────────
             const _SectionLabel('Event'),
             const SizedBox(height: 8),
             _ReadOnlyField(
@@ -201,12 +285,14 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
             ),
             const SizedBox(height: 24),
 
+            // ── Ticket type ────────────────────────────────────────────────
             const _SectionLabel('Ticket Type'),
             const SizedBox(height: 8),
             _TypeSelector(
               selected: _ticketType,
               types: _ticketTypes,
               prices: _prices,
+              remaining: _remaining,
               onChanged: (t) {
                 setState(() => _ticketType = t);
                 if (_prices.containsKey(t)) {
@@ -216,22 +302,23 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
             ),
             const SizedBox(height: 24),
 
+            // ── Price ──────────────────────────────────────────────────────
             const _SectionLabel('Price (MWK)'),
             const SizedBox(height: 8),
             TextFormField(
               controller: _priceCtrl,
               style: AppTheme.sans(fontSize: 14),
-              decoration:
-                  _decoration('0.00', Icons.attach_money_outlined).copyWith(
-                prefixText: 'MWK ',
-              ),
+              decoration: _inputDecoration('0.00', Icons.attach_money_outlined)
+                  .copyWith(prefixText: 'MWK '),
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}')),
               ],
               validator: (v) {
-                if (v == null || v.trim().isEmpty) return 'Price is required';
+                if (v == null || v.trim().isEmpty) {
+                  return 'Please enter a price';
+                }
                 final d = double.tryParse(v.trim());
                 if (d == null || d < 0) return 'Enter a valid price';
                 return null;
@@ -239,33 +326,21 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
             ),
             const SizedBox(height: 24),
 
-            // NEW: Image format selector removed — C++ outputs PNG directly.
-
-            const _SectionLabel('Owner Name'),
+            // ── Attendee name ──────────────────────────────────────────────
+            const _SectionLabel('Attendee Name'),
             const SizedBox(height: 8),
             TextFormField(
               controller: _ownerNameCtrl,
               style: AppTheme.sans(fontSize: 14),
-              decoration: _decoration('Full name', Icons.person_outline),
+              decoration: _inputDecoration('Full name', Icons.person_outline),
               textCapitalization: TextCapitalization.words,
               validator: (v) => (v == null || v.trim().isEmpty)
-                  ? 'Owner name is required'
+                  ? 'Please enter the attendee name'
                   : null,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 32),
 
-            const _SectionLabel('Owner ID'),
-            const SizedBox(height: 8),
-            TextFormField(
-              controller: _ownerIDCtrl,
-              style: AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
-              decoration: _decoration('user ID', Icons.badge_outlined),
-              validator: (v) => (v == null || v.trim().isEmpty)
-                  ? 'Owner ID is required'
-                  : null,
-            ),
-            const SizedBox(height: 40),
-
+            // ── Submit ─────────────────────────────────────────────────────
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
@@ -277,7 +352,8 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
                       AppTheme.primaryColor.withValues(alpha: 0.4),
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
                 child: _submitting
                     ? const SizedBox(
@@ -289,10 +365,11 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
                     : Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.bolt, size: 20),
+                          const Icon(Icons.confirmation_number_outlined,
+                              size: 20),
                           const SizedBox(width: 8),
                           Text(
-                            'MINE & CREATE TICKET',
+                            'Issue Ticket',
                             style: AppTheme.sans(
                               fontSize: 14,
                               fontWeight: FontWeight.w700,
@@ -305,7 +382,7 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Creating a ticket. This may take a few seconds.',
+              'This may take a few seconds while the ticket is secured.',
               textAlign: TextAlign.center,
               style: AppTheme.sans(fontSize: 11, color: AppTheme.subTextColor),
             ),
@@ -316,14 +393,18 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     );
   }
 
-  InputDecoration _decoration(String hint, IconData icon) => InputDecoration(
+  InputDecoration _inputDecoration(String hint, IconData icon) =>
+      InputDecoration(
         hintText: hint,
         prefixIcon: Icon(icon, color: AppTheme.subTextColor, size: 20),
         hintStyle: AppTheme.sans(fontSize: 13, color: const Color(0xFF555555)),
       );
 }
 
-// ── Reusable widgets ─────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Reusable widgets
+// ─────────────────────────────────────────────────────────────────────────────
+
 class _SectionLabel extends StatelessWidget {
   final String text;
   const _SectionLabel(this.text);
@@ -374,31 +455,30 @@ class _ReadOnlyField extends StatelessWidget {
       );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// _TypeSelector
+// ─────────────────────────────────────────────────────────────────────────────
 class _TypeSelector extends StatelessWidget {
   final String selected;
   final List<String> types;
   final Map<String, double> prices;
+  final Map<String, int> remaining;
   final ValueChanged<String> onChanged;
 
   const _TypeSelector({
     required this.selected,
     required this.types,
     required this.prices,
+    required this.remaining,
     required this.onChanged,
   });
 
-  Color _colorFor(String type) {
-    switch (type.toLowerCase()) {
-      case 'vip':
-        return const Color(0xFFFFD700);
-      case 'backstage':
-        return const Color(0xFFFF6D00);
-      case 'student':
-        return const Color(0xFF69F0AE);
-      default:
-        return AppTheme.primaryColor;
-    }
-  }
+  Color _colorFor(String type) => switch (type.toLowerCase()) {
+        'vip' => const Color(0xFFFFD700),
+        'backstage' => const Color(0xFFFF6D00),
+        'student' => const Color(0xFF69F0AE),
+        _ => AppTheme.primaryColor,
+      };
 
   @override
   Widget build(BuildContext context) => Wrap(
@@ -408,19 +488,27 @@ class _TypeSelector extends StatelessWidget {
           final isSelected = t == selected;
           final color = _colorFor(t);
           final price = prices[t];
+          final slots = remaining[t];
+          final soldOut = slots != null && slots <= 0;
 
           return GestureDetector(
-            onTap: () => onChanged(t),
+            onTap: soldOut ? null : () => onChanged(t),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
-                color: isSelected
-                    ? color.withValues(alpha: 0.18)
-                    : AppTheme.cardMidColor,
+                color: soldOut
+                    ? AppTheme.cardMidColor.withValues(alpha: 0.5)
+                    : isSelected
+                        ? color.withValues(alpha: 0.18)
+                        : AppTheme.cardMidColor,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                  color: isSelected ? color : AppTheme.dividerColor,
+                  color: soldOut
+                      ? AppTheme.dividerColor.withValues(alpha: 0.4)
+                      : isSelected
+                          ? color
+                          : AppTheme.dividerColor,
                   width: isSelected ? 1.5 : 1,
                 ),
               ),
@@ -433,7 +521,11 @@ class _TypeSelector extends StatelessWidget {
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.6,
-                      color: isSelected ? color : AppTheme.subTextColor,
+                      color: soldOut
+                          ? AppTheme.subTextColor.withValues(alpha: 0.4)
+                          : isSelected
+                              ? color
+                              : AppTheme.subTextColor,
                     ),
                   ),
                   if (price != null)
@@ -441,7 +533,24 @@ class _TypeSelector extends StatelessWidget {
                       'MWK ${price.toStringAsFixed(0)}',
                       style: AppTheme.sans(
                         fontSize: 10,
-                        color: isSelected ? color : AppTheme.subTextColor,
+                        color: soldOut
+                            ? AppTheme.subTextColor.withValues(alpha: 0.4)
+                            : isSelected
+                                ? color
+                                : AppTheme.subTextColor,
+                      ),
+                    ),
+                  if (slots != null)
+                    Text(
+                      soldOut ? 'SOLD OUT' : '$slots left',
+                      style: AppTheme.sans(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                        color: soldOut
+                            ? AppTheme.tamperedColor.withValues(alpha: 0.7)
+                            : isSelected
+                                ? color.withValues(alpha: 0.8)
+                                : AppTheme.subTextColor.withValues(alpha: 0.6),
                       ),
                     ),
                 ],
@@ -452,34 +561,37 @@ class _TypeSelector extends StatelessWidget {
       );
 }
 
-class _MiningDialog extends StatelessWidget {
-  const _MiningDialog();
+// ─────────────────────────────────────────────────────────────────────────────
+// _IssuingDialog — shown while the blockchain operation runs
+// ─────────────────────────────────────────────────────────────────────────────
+class _IssuingDialog extends StatelessWidget {
+  const _IssuingDialog();
 
   @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: AppTheme.cardColor,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircularProgressIndicator(color: AppTheme.primaryColor),
-            const SizedBox(height: 24),
-            Text(
-              'Mining ticket...',
-              style: AppTheme.merri(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Processing.\nThis may take 5–30 seconds on low-end devices.',
-              textAlign: TextAlign.center,
-              style: AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
-            ),
-          ],
+  Widget build(BuildContext context) => Dialog(
+        backgroundColor: AppTheme.cardColor,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(color: AppTheme.primaryColor),
+              const SizedBox(height: 24),
+              Text(
+                'Issuing your ticket…',
+                style:
+                    AppTheme.merri(fontSize: 18, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Securing the ticket on the blockchain.\nThis usually takes 5–30 seconds.',
+                textAlign: TextAlign.center,
+                style:
+                    AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
+              ),
+            ],
+          ),
         ),
-      ),
-    );
-  }
+      );
 }

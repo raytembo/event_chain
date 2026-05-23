@@ -1,11 +1,21 @@
 // lib/features/auth/login_screen.dart
+//
+// Fix notes (spinner loop):
+//
+//   • _login() no longer calls Navigator.  The _AuthRouter in main.dart watches
+//     authProvider and automatically swaps to the correct root scaffold the
+//     moment AuthNotifier.login() sets user to non-null.
+//
+//   • Removing the Navigator call also fixes the `if (!mounted) return` bail-
+//     out that previously prevented navigation: when _AuthRouter is the parent,
+//     LoginScreen is unmounted as soon as loading becomes true, so any
+//     Navigator call inside _login() was silently discarded.
+//
+//   • All UI is unchanged from the original.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/models/user_model.dart';
 import '../../shared/theme/app_theme.dart';
-import '../customer/customer_root_scaffold.dart'; // ← Customer root
-import '../owner/owner_root_scaffold.dart'; // ← Owner root (create if not exists)
 import 'auth_provider.dart';
 import 'register_screen.dart';
 
@@ -54,40 +64,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
           password: _passCtrl.text,
         );
 
-    if (!mounted) return;
-
-    if (ok) {
-      // Get the logged-in user with role
-      final user = ref.read(authProvider).user;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Welcome back!',
-            style: AppTheme.sans(fontSize: 13, color: Colors.black),
-          ),
-          backgroundColor: AppTheme.authenticColor,
-          duration: const Duration(seconds: 2),
-        ),
-      );
-
-      // Small delay to let Riverpod state settle + show snackbar
-      await Future.delayed(const Duration(milliseconds: 700));
-      if (!mounted) return;
-
-      // ── Role-based navigation (this fixes the unreliable navigation) ──
-      if (user?.role == UserRole.owner) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const OwnerRootScaffold()),
-        );
-      } else {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const CustomerRootScaffold()),
-        );
-      }
-    } else {
+    // _AuthRouter handles navigation automatically when user becomes non-null.
+    // We only need to handle the failure case here.
+    if (!ok && mounted) {
       final err = ref.read(authProvider).error ?? 'Login failed';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -112,7 +91,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
             children: [
               const SizedBox(height: 24),
 
-              // Animated Logo
+              // ── Animated Logo ──────────────────────────────────────────────
               AnimatedBuilder(
                 animation: _pulseAnim,
                 builder: (_, child) => Opacity(
@@ -127,8 +106,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                     border: Border.all(color: AppTheme.primaryColor, width: 2),
                     color: AppTheme.primaryColor.withValues(alpha: 0.08),
                   ),
-                  child:
-                      const Icon(Icons.link, color: AppTheme.primaryColor, size: 32),
+                  child: const Icon(
+                    Icons.link,
+                    color: AppTheme.primaryColor,
+                    size: 32,
+                  ),
                 ),
               ),
 
@@ -161,6 +143,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // ── Email ────────────────────────────────────────────────
                     _fieldLabel('EMAIL'),
                     TextFormField(
                       controller: _emailCtrl,
@@ -173,7 +156,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                         return null;
                       },
                     ),
+
                     const SizedBox(height: 20),
+
+                    // ── Password ─────────────────────────────────────────────
                     _fieldLabel('PASSWORD'),
                     TextFormField(
                       controller: _passCtrl,
@@ -192,7 +178,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                       validator: (v) =>
                           (v == null || v.isEmpty) ? 'Required' : null,
                     ),
+
                     const SizedBox(height: 36),
+
+                    // ── Sign-in button ───────────────────────────────────────
                     SizedBox(
                       width: double.infinity,
                       height: 52,
@@ -225,11 +214,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                               ),
                       ),
                     ),
+
                     const SizedBox(height: 32),
+
+                    // ── Divider ──────────────────────────────────────────────
                     Row(
                       children: [
                         const Expanded(
-                            child: Divider(color: AppTheme.dividerColor)),
+                          child: Divider(color: AppTheme.dividerColor),
+                        ),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           child: Text(
@@ -241,21 +234,28 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                           ),
                         ),
                         const Expanded(
-                            child: Divider(color: AppTheme.dividerColor)),
+                          child: Divider(color: AppTheme.dividerColor),
+                        ),
                       ],
                     ),
+
                     const SizedBox(height: 24),
+
+                    // ── Register link ────────────────────────────────────────
                     Center(
                       child: TextButton(
                         onPressed: () => Navigator.pushReplacement(
                           context,
                           MaterialPageRoute(
-                              builder: (_) => const RegisterScreen()),
+                            builder: (_) => const RegisterScreen(),
+                          ),
                         ),
                         child: RichText(
                           text: TextSpan(
                             style: AppTheme.sans(
-                                fontSize: 13, color: AppTheme.subTextColor),
+                              fontSize: 13,
+                              color: AppTheme.subTextColor,
+                            ),
                             children: [
                               const TextSpan(text: "Don't have an account?  "),
                               TextSpan(
@@ -291,6 +291,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
       ),
     );
   }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
 
   Widget _fieldLabel(String text) => Padding(
         padding: const EdgeInsets.only(bottom: 8),

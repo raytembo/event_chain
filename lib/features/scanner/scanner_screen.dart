@@ -13,7 +13,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/ffi_bridge/eventchain_ffi.dart';
-import '../../core/services/supabase_storage_service.dart';
 import '../../shared/theme/app_theme.dart';
 import '../events/events_provider.dart';
 import 'verification_result_screen.dart';
@@ -115,8 +114,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     final String persistentPath;
     try {
       final src = File(sourcePath);
-      if (!await src.exists())
+      if (!await src.exists()) {
         throw const ImageReadError('Source image no longer exists');
+      }
       persistentPath = '${tempDir.path}/scan_orig_$ts.$ext';
       await src.copy(persistentPath);
     } on ScanError {
