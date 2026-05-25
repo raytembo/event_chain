@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/ffi_bridge/eventchain_ffi.dart';
 import '../../core/models/ticket_model.dart';
+import '../../core/models/ticket_record.dart';
 import '../../shared/theme/app_theme.dart';
 
 class VerificationResultScreen extends StatelessWidget {
@@ -94,6 +95,7 @@ class VerificationResultScreen extends StatelessWidget {
   }
 
   TicketModel? _resolveTicket() {
+    // ── Priority 1: live FFI lookup against the local blockchain ────────────
     if (eventName != null && blockIndex != null) {
       try {
         return EventChainFFI.instance.getTicket(eventName!, blockIndex!);
@@ -101,13 +103,35 @@ class VerificationResultScreen extends StatelessWidget {
         debugPrint('[Result] FFI getTicket failed: $e');
       }
     }
+
+    // ── Priority 2: Supabase row (from v_ticket_detail via scanner) ──────────
+    //
+    // FIX (Bug 3): The raw Supabase row uses snake_case keys
+    // (ticket_id, owner_name, block_index, event_name, …) because it comes
+    // straight from PostgREST. The old code called TicketModel.fromJson()
+    // which looks for camelCase keys (ticketID, ownerName, …) — every field
+    // silently resolved to '' / 0.0, producing a completely blank ticket card.
+    //
+    // The correct approach is TicketRecord.fromMap() (which was written for
+    // exactly this snake_case shape) followed by toFFIModel() to produce a
+    // TicketModel the rest of the UI can display uniformly.
+    //
+    // If fromMap() throws (e.g. a required field is absent or the schema
+    // changed), we fall back to TicketModel.fromJson() as a best-effort so
+    // at least partial data can appear, then _RawDataCard as a last resort.
     if (supabaseTicketData != null) {
+      try {
+        return TicketRecord.fromMap(supabaseTicketData!).toFFIModel();
+      } catch (e) {
+        debugPrint('[Result] TicketRecord.fromMap failed: $e');
+      }
       try {
         return TicketModel.fromJson(supabaseTicketData!);
       } catch (e) {
-        debugPrint('[Result] TicketModel.fromJson failed: $e');
+        debugPrint('[Result] TicketModel.fromJson fallback also failed: $e');
       }
     }
+
     return null;
   }
 }

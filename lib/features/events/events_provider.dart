@@ -1,6 +1,7 @@
 // lib/features/events/events_provider.dart
 
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
@@ -8,15 +9,12 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/ffi_bridge/eventchain_ffi.dart';
 import '../../core/models/ticket_model.dart';
-import '../../core/models/ticket_record.dart';
+import '../../core/models/ticket_record.dart'; // used: TicketTypeX.fromString
 import '../../core/services/supabase_service.dart';
 import '../../core/services/supabase_storage_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ownerEventsProvider
-//
-// Fetches the signed-in owner's events, joined with their ticket-type rows so
-// the events list can show sold / remaining counts without a second query.
 // ─────────────────────────────────────────────────────────────────────────────
 final ownerEventsProvider =
     FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
@@ -38,14 +36,9 @@ final ownerEventsProvider =
 // EventsState
 // ─────────────────────────────────────────────────────────────────────────────
 class EventsState {
-  /// Names of blockchain events loaded locally on this device.
   final List<String> eventNames;
   final bool loading;
-
-  /// User-facing message (non-technical). Null when everything is fine.
   final String? message;
-
-  /// Events that are currently syncing with the cloud.
   final Set<String> syncing;
 
   const EventsState({
@@ -83,7 +76,6 @@ class EventsNotifier extends Notifier<EventsState> {
 
   // ── Local chain list ───────────────────────────────────────────────────────
 
-  /// Refreshes the list of locally-known event names from the FFI layer.
   void refresh() {
     try {
       state = state.copyWith(
@@ -101,8 +93,6 @@ class EventsNotifier extends Notifier<EventsState> {
 
   // ── Remote chain sync ──────────────────────────────────────────────────────
 
-  /// Downloads the blockchain file for [eventName] from the cloud and loads
-  /// it into the local FFI instance.
   Future<bool> loadRemoteChain(String eventName) async {
     state = state.copyWith(syncing: {...state.syncing, eventName});
     try {
@@ -130,7 +120,6 @@ class EventsNotifier extends Notifier<EventsState> {
 
   // ── Ticket prices & capacity ───────────────────────────────────────────────
 
-  /// Returns { 'General': 5000.0, 'VIP': 15000.0, … } for [eventId].
   Future<Map<String, double>> getTicketPrices(String eventId) async {
     try {
       final res = await _svc.eventTicketTypes
@@ -146,8 +135,6 @@ class EventsNotifier extends Notifier<EventsState> {
     }
   }
 
-  /// Returns true if at least one slot remains for [ticketType] in [eventId].
-  /// Queries the DB directly so the check is always live.
   Future<bool> _hasCapacity({
     required String eventId,
     required String ticketType,
@@ -177,18 +164,15 @@ class EventsNotifier extends Notifier<EventsState> {
   ///   5. Upload the updated blockchain file to Supabase Storage
   ///   6. Insert the ticket row into the Supabase database
   ///
-  /// [blockIndex] in the DB uses the raw 0-based C++ chain index.
-  /// [storageIndex] (blockIndex + 1) is used only for Storage file paths.
-  ///
   /// Returns (true, localStegoPath) on full success.
   Future<(bool success, String? stegoLocalPath)> addTicket({
     required String eventName,
     required String eventId,
     required String posterUrl,
     required String ownerName,
-    required String ownerID, // FFI / stego payload only
-    required String eventDate, // FFI / stego payload only
-    required String venue, // FFI / stego payload only
+    required String ownerID,
+    required String eventDate,
+    required String venue,
     required String ticketType,
     required double price,
   }) async {
@@ -230,24 +214,35 @@ class EventsNotifier extends Notifier<EventsState> {
 
       // ── Step 2: Mine the block locally ───────────────────────────────────
       final mined = await _ffi.addTicket(eventName, ticket);
-      if (!mined)
+      if (!mined) {
         throw Exception(
             'Something went wrong while creating your ticket. Please try again.');
+      }
 
-      // blockIndex is 0-based (matches C++ chain and DB block_index column).
-      // storageIndex is 1-based — used only for Storage file names.
       final blockIndex = _ffi.getEventSize(eventName) - 1;
-      final storageIndex = blockIndex + 1; // ticket_1.png, ticket_2.png, …
+      final storageIndex = blockIndex + 1; // 1-based for Storage paths
 
       debugPrint(
           '✅ Block mined — blockIndex: $blockIndex  storageIndex: $storageIndex');
 
       // ── Step 3: Embed ticket data into the event poster ──────────────────
-      final coverLocalPath = await _storage.downloadEventPosterToTemp(
+      //
+      // The C++ steganography layer only accepts lossless cover images
+      // (PNG or BMP). Event posters are commonly uploaded as JPEG, so we
+      // must convert any non-lossless download to PNG before calling
+      // embedTicket — otherwise the C++ layer returns -1 silently.
+      final rawCoverPath = await _downloadPosterWithFallback(
         eventId: eventId,
         posterUrl: posterUrl,
         tempDir: tempPath,
       );
+
+      // Convert to PNG if the downloaded file is not already lossless.
+      final coverLocalPath = (rawCoverPath != null &&
+              !rawCoverPath.endsWith('.png') &&
+              !rawCoverPath.endsWith('.bmp'))
+          ? await _convertImageToPng(rawCoverPath, tempPath)
+          : rawCoverPath;
 
       final finalStegoPath = '$tempPath/stego_${ticket.ticketID}.png';
       bool embedOk;
@@ -268,9 +263,10 @@ class EventsNotifier extends Notifier<EventsState> {
         );
       }
 
-      if (!embedOk)
+      if (!embedOk) {
         throw Exception(
             'Could not generate your ticket image. Please try again.');
+      }
       if (!await File(finalStegoPath).exists()) {
         throw Exception('Ticket image was not saved. Please try again.');
       }
@@ -278,7 +274,7 @@ class EventsNotifier extends Notifier<EventsState> {
       // ── Step 4: Upload stego image to Supabase Storage ───────────────────
       final stegoUrl = await _storage.uploadStegoTicket(
         eventId: eventId,
-        blockIndex: storageIndex, // 1-based for storage paths
+        blockIndex: storageIndex,
         stegoFile: File(finalStegoPath),
       );
       if (stegoUrl == null) {
@@ -293,7 +289,6 @@ class EventsNotifier extends Notifier<EventsState> {
         eventName: eventName,
       );
       if (chainFile == null) {
-        // Non-fatal — ticket is still created; blockchain backup will retry.
         debugPrint('⚠️  Blockchain file not found — local copy still intact.');
         state = state.copyWith(
           message:
@@ -314,20 +309,33 @@ class EventsNotifier extends Notifier<EventsState> {
       }
 
       // ── Step 6: Insert ticket row into the database ──────────────────────
-      // block_index stores the 0-based C++ chain index so it lines up with
-      // FFI lookups. storageIndex is only for Storage file-name resolution.
-      await _svc.tickets.insert({
-        'event_id': eventId,
-        'ticket_id': ticket.ticketID,
-        'block_index':
-            blockIndex, // 0-based — matches getTicket(eventName, blockIndex)
-        'owner_id': authUser.id,
-        'owner_name': ticket.ownerName,
-        'ticket_type': ticket.ticketType,
-        'price': ticket.price,
-        'stego_url': stegoUrl,
-        'is_sold': false,
-      });
+      //
+      // FIX: Use _svc.insertTicket() instead of a raw .tickets.insert({}).
+      //
+      // The raw insert was the source of two silent failures:
+      //   a) Without .select(), newer Supabase SDK versions return null on
+      //      success *and* on certain errors, so PostgrestException was never
+      //      thrown and failures were invisible.
+      //   b) It bypassed insertTicket()'s typed TicketType parameter, which
+      //      meant Postgres enum coercion was not guaranteed and any RLS /
+      //      constraint violation swallowed the error silently.
+      //
+      // blockIndex is 0-based — matches getTicket(eventName, blockIndex).
+      final record = await _svc.insertTicket(
+        ticketId: ticket.ticketID,
+        blockIndex: blockIndex,
+        eventId: eventId,
+        ownerName: ticket.ownerName,
+        ticketType: TicketTypeX.fromString(ticket.ticketType),
+        price: ticket.price,
+        stegoUrl: stegoUrl,
+      );
+
+      if (record == null) {
+        // insertTicket() already logged the PostgREST error.
+        throw Exception(
+            'Could not save your ticket to the database. Please try again.');
+      }
 
       refresh();
       state = state.copyWith(loading: false);
@@ -368,8 +376,115 @@ class EventsNotifier extends Notifier<EventsState> {
     return path;
   }
 
-  /// Locates the `.web3chain` file for [eventName], trying multiple strategies
-  /// because the C++ layer and the Dart download target may use different paths.
+  /// Converts any image at [sourcePath] to a lossless PNG saved in [tempDir].
+  ///
+  /// The C++ steganography layer hard-rejects JPEG / WebP as cover images
+  /// because those formats are lossy. Flutter's dart:ui codec can decode any
+  /// format the OS supports and re-encode to raw PNG without an extra package.
+  ///
+  /// Returns the PNG path on success, or null if conversion fails (in which
+  /// case the caller should fall through to the synthetic-cover path).
+  Future<String?> _convertImageToPng(String sourcePath, String tempDir) async {
+    try {
+      final bytes = await File(sourcePath).readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final byteData =
+          await frame.image.toByteData(format: ui.ImageByteFormat.png);
+      frame.image.dispose();
+      if (byteData == null) {
+        debugPrint('⚠️  PNG conversion produced null byte data: $sourcePath');
+        return null;
+      }
+      // Place the converted file alongside the original, same base name.
+      final base =
+          sourcePath.split('/').last.replaceAll(RegExp(r'\.[^.]+$'), '');
+      final pngPath = '$tempDir/${base}_converted.png';
+      await File(pngPath).writeAsBytes(byteData.buffer.asUint8List());
+      debugPrint('✅ Converted cover to PNG: $pngPath');
+      return pngPath;
+    } catch (e) {
+      debugPrint('❌ PNG conversion failed ($sourcePath): $e');
+      return null;
+    }
+  }
+
+  /// Downloads the event poster to a temp file.
+  ///
+  /// Strategy (in order):
+  ///   1. Extract the exact storage path from [posterUrl].
+  ///      The Supabase public URL already encodes the real bucket path, so this
+  ///      always works — even when the poster was uploaded under a different ID
+  ///      than [eventId] (e.g. a timestamp used before the UUID was available).
+  ///   2. Fall back to reconstructing the path from [eventId] + known extensions
+  ///      in case the URL is empty or from a different host.
+  Future<String?> _downloadPosterWithFallback({
+    required String eventId,
+    required String posterUrl,
+    required String tempDir,
+  }) async {
+    final storage = Supabase.instance.client.storage;
+
+    // ── Strategy 1: extract the exact path from the public URL ──────────────
+    // URL format: https://<ref>.supabase.co/storage/v1/object/public/<bucket>/<path…>
+    // Example:    …/public/event-posters/events/1779703034130/poster.jpg
+    //                                           ↑ may differ from eventId UUID ↑
+    if (posterUrl.isNotEmpty) {
+      try {
+        final uri = Uri.tryParse(posterUrl);
+        if (uri != null) {
+          // pathSegments: ['storage','v1','object','public','event-posters','events','<id>','poster.jpg']
+          final segments = uri.pathSegments;
+          final bucketIndex = segments.indexOf('event-posters');
+          if (bucketIndex != -1 && bucketIndex + 1 < segments.length) {
+            final storagePath = segments.sublist(bucketIndex + 1).join('/');
+            // Derive a local filename from the last path segment.
+            final fileName = segments.last; // e.g. poster.jpg
+            final ext =
+                fileName.contains('.') ? fileName.split('.').last : 'jpg';
+            final savePath = '$tempDir/cover_${eventId}_url.$ext';
+            final bytes =
+                await storage.from('event-posters').download(storagePath);
+            await File(savePath).writeAsBytes(bytes);
+            debugPrint(
+                '✅ Poster downloaded via URL path ($storagePath) → $savePath');
+            return savePath;
+          }
+        }
+      } on StorageException catch (e) {
+        debugPrint(
+            '⚠️  URL-path download failed: ${e.message} — trying eventId fallback');
+      } catch (e) {
+        debugPrint('⚠️  URL-path download error: $e — trying eventId fallback');
+      }
+    }
+
+    // ── Strategy 2: reconstruct path from eventId + known extensions ─────────
+    for (final ext in ['png', 'jpg', 'jpeg', 'webp', 'bmp']) {
+      try {
+        final remotePath = 'events/$eventId/poster.$ext';
+        final bytes = await storage.from('event-posters').download(remotePath);
+        final savePath = '$tempDir/cover_$eventId.$ext';
+        await File(savePath).writeAsBytes(bytes);
+        debugPrint(
+            '✅ Poster downloaded via eventId fallback ($ext) → $savePath');
+        return savePath;
+      } on StorageException catch (e) {
+        final body = e.message;
+        if (body.contains('not_found') || body.contains('404')) continue;
+        debugPrint(
+            '❌ StorageException downloading poster ($ext): ${e.message}');
+        return null;
+      } catch (e) {
+        debugPrint('❌ Error downloading poster ($ext): $e');
+        return null;
+      }
+    }
+
+    debugPrint('⚠️  Poster not found in storage for event: $eventId');
+    return null;
+  }
+
   Future<File?> _findChainFile({
     required String eventsDir,
     required String appDocDir,
@@ -378,13 +493,11 @@ class EventsNotifier extends Notifier<EventsState> {
     final safeName =
         eventName.trim().replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
 
-    // 1 & 2 — exact match in both candidate directories.
     for (final dir in [eventsDir, appDocDir]) {
       final f = File('$dir/$safeName.web3chain');
       if (await f.exists()) return f;
     }
 
-    // 3 & 4 — directory scan fallback.
     final allCandidates = <File>[];
     for (final dirPath in [eventsDir, appDocDir]) {
       final dir = Directory(dirPath);
