@@ -1,6 +1,5 @@
-// steganography.h  –  DIAGNOSTIC EDITION
-// Drop-in replacement.  Adds selfTestRoundtrip(), diagnosticExtract(),
-// and detailed error strings so we know WHY extraction fails.
+// steganography.h  –  DIAGNOSTIC EDITION (FULLY CORRECTED)
+// Drop-in replacement featuring exact separable 2D DCT/IDCT and robust pixel rounding.
 
 #ifndef STEGANOGRAPHY_H
 #define STEGANOGRAPHY_H
@@ -30,7 +29,7 @@ extern "C" {
 #include <iomanip>
 #include <numeric>
 #include <functional>
-#include "config.h"
+#include "../config.h"
 
 using namespace cimg_library;
 
@@ -49,16 +48,14 @@ static constexpr int ZIGZAG_MID_START = 5;
 static constexpr int ZIGZAG_MID_END   = 27;
 static constexpr int ZIGZAG_MID_COUNT = ZIGZAG_MID_END - ZIGZAG_MID_START + 1;
 static constexpr int BITS_PER_BLOCK   = 5;
-// FIX: use the config macro so the step size can be tuned from config.h
 static constexpr double QIM_Q         = STEGO_QIM_STEP;
 
 enum class ImageFormat { BMP, PNG, JPEG, WEBP, TIFF, PNM, UNKNOWN };
 
-// ── Diagnostic result for extract ─────────────────────────────────────────────
 struct ExtractResult {
     bool        success = false;
-    std::string payload;          // valid only if success==true
-    std::string error;            // human-readable failure reason
+    std::string payload;          
+    std::string error;            
     std::size_t bitsRead = 0;
     std::uint32_t headerLen = 0;
     std::uint32_t headerChk = 0;
@@ -83,19 +80,32 @@ public:
 
         CImg<unsigned char> img(W, H, 1, 3);
         cimg_forXY(img, x, y) {
-            double v = 128.0
-                    + 55.0 * std::sin(x * 0.04)
-                    + 35.0 * std::cos(y * 0.06)
-                    + 20.0 * std::sin((x + y) * 0.025)
-                    + 15.0 * std::cos((x - y) * 0.05)
-                    +  8.0 * std::sin(x * 1.9) * std::cos(y * 2.3);
-            auto c = (unsigned char)std::max(5.0, std::min(250.0, v));
-            img(x, y, 0, 0) = c;
-            img(x, y, 0, 1) = c;
-            img(x, y, 0, 2) = c;
+            // Red Channel: Dominant smooth horizontal/diagonal waves
+            double r_v = 128.0
+                    + 55.0 * std::sin(x * 0.035)
+                    + 35.0 * std::cos(y * 0.025)
+                    + 25.0 * std::sin((x + y) * 0.015);
+
+            // Green Channel: Phase-shifted vertical and cross waves
+            double g_v = 128.0
+                    + 55.0 * std::sin(y * 0.040 + 1.5)
+                    + 35.0 * std::cos(x * 0.030)
+                    + 25.0 * std::sin((x - y) * 0.020);
+
+            // Blue Channel: High-frequency complex textures for depth
+            double b_v = 128.0
+                    + 55.0 * std::cos(x * 0.025 - 0.8)
+                    + 35.0 * std::sin(y * 0.045 + 0.5)
+                    + 20.0 * std::cos((x + y) * 0.035)
+                    + 12.0 * std::sin(x * 1.5) * std::cos(y * 1.8);
+
+            // Clamp and assign unique values to each channel to construct a full-color image
+            img(x, y, 0, 0) = (unsigned char)std::max(5.0, std::min(250.0, r_v));
+            img(x, y, 0, 1) = (unsigned char)std::max(5.0, std::min(250.0, g_v));
+            img(x, y, 0, 2) = (unsigned char)std::max(5.0, std::min(250.0, b_v));
         }
         bool ok = saveImage(img, outputPath, fmt);
-        if (ok) std::cout << "  [Stego] Cover generated: " << outputPath << "\n";
+        if (ok) std::cout << "  [Stego] Colorful cover generated: " << outputPath << "\n";
         return ok;
     }
 
@@ -103,12 +113,11 @@ public:
     {
         int blocksW = W / 8;
         int blocksH = H / 8;
-        std::size_t totalBits = (std::size_t)blocksW * blocksH * BITS_PER_BLOCK;
+        std::size_t totalBits = static_cast<std::size_t>(blocksW) * blocksH * BITS_PER_BLOCK;
         if (totalBits < 64u + 8u * BITS_PER_BLOCK) return 0;
         return (totalBits - 64u) / 8u;
     }
 
-    // ── Classic embed (unchanged logic, added logging) ───────────────────────
     static bool embed(const std::string& coverPath,
             const std::string& stegoPath,
             const std::string& payload,
@@ -121,7 +130,6 @@ public:
             return false;
         }
 
-        // Rescale if needed
         if (img.width() > MAX_IMAGE_DIMENSION || img.height() > MAX_IMAGE_DIMENSION) {
             int newW, newH;
             if (img.width() >= img.height()) {
@@ -196,7 +204,6 @@ public:
         return saved;
     }
 
-    // ── Classic extract (kept for compat) ───────────────────────────────────
     static std::string extract(const std::string& stegoPath,
             const std::string& key = "")
     {
@@ -204,7 +211,6 @@ public:
         return r.success ? r.payload : "";
     }
 
-    // ── DIAGNOSTIC extract: tells you EXACTLY why it failed ──────────────────
     static ExtractResult diagnosticExtract(const std::string& stegoPath,
             const std::string& key = "")
     {
@@ -299,7 +305,6 @@ public:
         return res;
     }
 
-    // ── SELF TEST: embed then extract immediately ─────────────────────────────
     static std::string selfTestRoundtrip(const std::string& coverPath,
                                           const std::string& stegoPath,
                                           const std::string& payload,
@@ -331,7 +336,6 @@ public:
         return report.str();
     }
 
-    // ── Format helpers ────────────────────────────────────────────────────────
     static ImageFormat detectFormat(const std::string& filename)
     {
         std::string ext;
@@ -356,7 +360,6 @@ public:
     }
 
 private:
-    // ── KeyedCoeffSelector ────────────────────────────────────────────────────
     class KeyedCoeffSelector {
     public:
         explicit KeyedCoeffSelector(const std::string& key)
@@ -388,7 +391,6 @@ private:
         static uint32_t lcg(uint32_t s) { return s * 1664525u + 1013904223u; }
     };
 
-    // ── Checksum ──────────────────────────────────────────────────────────────
     static std::uint32_t checksum32(const std::string& data)
     {
         std::uint32_t a = 1, b = 0;
@@ -412,7 +414,6 @@ private:
         return bits;
     }
 
-    // ── QIM ───────────────────────────────────────────────────────────────────
     static void embedBit(double& coeff, int bit)
     {
         int k = static_cast<int>(std::floor(coeff / QIM_Q));
@@ -431,75 +432,66 @@ private:
         return ((k % 2) + 2) % 2;
     }
 
-    // ── AAN DCT ───────────────────────────────────────────────────────────────
-    static constexpr double C1 = 0.9807852804032304;
-    static constexpr double C2 = 0.9238795325112867;
-    static constexpr double C3 = 0.8314696123025452;
-    static constexpr double C4 = 0.7071067811865476;
-    static constexpr double C5 = 0.5555702330196022;
-    static constexpr double C6 = 0.3826834323650898;
-    static constexpr double C7 = 0.19509032201612825;
-    static constexpr double INV_SQRT8 = 0.3535533905932738;
-
+    // UPDATED: High-precision Separable 2D Orthogonal Discrete Cosine Transform (DCT-II)
     static void fastDct8x8(double b[8][8])
     {
         double tmp[8][8];
-        for (int i = 0; i < 8; ++i) {
-            double x0=b[i][0]+b[i][7], x1=b[i][1]+b[i][6];
-            double x2=b[i][2]+b[i][5], x3=b[i][3]+b[i][4];
-            double x4=b[i][3]-b[i][4], x5=b[i][2]-b[i][5];
-            double x6=b[i][1]-b[i][6], x7=b[i][0]-b[i][7];
-            double x8=x0+x3, x9=x1+x2, x10=x1-x2, x11=x0-x3;
-            tmp[i][0]=C4*(x8+x9); tmp[i][4]=C4*(x8-x9);
-            tmp[i][2]=C2*x11+C6*x10; tmp[i][6]=C6*x11-C2*x10;
-            double x12=-C4*(x4+x5), x13=C4*(x4-x5);
-            double x14=C3*x6+C5*x7, x15=C1*x7-C7*x6;
-            tmp[i][5]=x12+x14; tmp[i][3]=x13+x15;
-            tmp[i][1]=x13-x15; tmp[i][7]=x12-x14;
+        static const double pi = std::acos(-1.0);
+        
+        // Transform Rows sequentially
+        for (int y = 0; y < 8; ++y) {
+            for (int u = 0; u < 8; ++u) {
+                double sum = 0.0;
+                for (int x = 0; x < 8; ++x) {
+                    sum += b[x][y] * std::cos((2 * x + 1) * u * pi / 16.0);
+                }
+                double cu = (u == 0) ? 1.0 / std::sqrt(2.0) : 1.0;
+                tmp[u][y] = sum * cu * 0.5;
+            }
         }
-        for (int j = 0; j < 8; ++j) {
-            double x0=tmp[0][j]+tmp[7][j], x1=tmp[1][j]+tmp[6][j];
-            double x2=tmp[2][j]+tmp[5][j], x3=tmp[3][j]+tmp[4][j];
-            double x4=tmp[3][j]-tmp[4][j], x5=tmp[2][j]-tmp[5][j];
-            double x6=tmp[1][j]-tmp[6][j], x7=tmp[0][j]-tmp[7][j];
-            double x8=x0+x3, x9=x1+x2, x10=x1-x2, x11=x0-x3;
-            b[0][j]=INV_SQRT8*(x8+x9); b[4][j]=INV_SQRT8*(x8-x9);
-            b[2][j]=INV_SQRT8*(C2*x11+C6*x10); b[6][j]=INV_SQRT8*(C6*x11-C2*x10);
-            double x12=-C4*(x4+x5), x13=C4*(x4-x5);
-            double x14=C3*x6+C5*x7, x15=C1*x7-C7*x6;
-            b[5][j]=INV_SQRT8*(x12+x14); b[3][j]=INV_SQRT8*(x13+x15);
-            b[1][j]=INV_SQRT8*(x13-x15); b[7][j]=INV_SQRT8*(x12-x14);
+        // Transform Columns sequentially
+        for (int u = 0; u < 8; ++u) {
+            for (int v = 0; v < 8; ++v) {
+                double sum = 0.0;
+                for (int y = 0; y < 8; ++y) {
+                    sum += tmp[u][y] * std::cos((2 * y + 1) * v * pi / 16.0);
+                }
+                double cv = (v == 0) ? 1.0 / std::sqrt(2.0) : 1.0;
+                b[u][v] = sum * cv * 0.5;
+            }
         }
     }
 
+    // UPDATED: Symmetrical High-precision Separable 2D Inverse DCT (DCT-III)
     static void fastIdct8x8(double b[8][8])
     {
         double tmp[8][8];
-        for (int i = 0; i < 8; ++i) {
-            double x0=b[i][0]+b[i][4], x1=b[i][0]-b[i][4];
-            double x2=b[i][2]*C6-b[i][6]*C2, x3=b[i][6]*C6+b[i][2]*C2;
-            double x4=b[i][1]+b[i][7], x5=b[i][1]-b[i][7];
-            double x6=b[i][5]+b[i][3], x7=b[i][5]-b[i][3];
-            double x8=x4+x6, x9=x5+x7, x10=x5-x7, x11=x4-x6;
-            tmp[i][0]=x0+x3+x8; tmp[i][7]=x0+x3-x8;
-            tmp[i][1]=x1+x2+x9; tmp[i][6]=x1+x2-x9;
-            tmp[i][2]=x1-x2+x10; tmp[i][5]=x1-x2-x10;
-            tmp[i][3]=x0-x3+x11; tmp[i][4]=x0-x3-x11;
+        static const double pi = std::acos(-1.0);
+        
+        // Inverse Columns sequentially
+        for (int u = 0; u < 8; ++u) {
+            for (int y = 0; y < 8; ++y) {
+                double sum = 0.0;
+                for (int v = 0; v < 8; ++v) {
+                    double cv = (v == 0) ? 1.0 / std::sqrt(2.0) : 1.0;
+                    sum += cv * b[u][v] * std::cos((2 * y + 1) * v * pi / 16.0);
+                }
+                tmp[u][y] = sum * 0.5;
+            }
         }
-        for (int j = 0; j < 8; ++j) {
-            double x0=tmp[0][j]+tmp[4][j], x1=tmp[0][j]-tmp[4][j];
-            double x2=tmp[2][j]*C6-tmp[6][j]*C2, x3=tmp[6][j]*C6+tmp[2][j]*C2;
-            double x4=tmp[1][j]+tmp[7][j], x5=tmp[1][j]-tmp[7][j];
-            double x6=tmp[5][j]+tmp[3][j], x7=tmp[5][j]-tmp[3][j];
-            double x8=x4+x6, x9=x5+x7, x10=x5-x7, x11=x4-x6;
-            b[0][j]=INV_SQRT8*(x0+x3+x8); b[7][j]=INV_SQRT8*(x0+x3-x8);
-            b[1][j]=INV_SQRT8*(x1+x2+x9); b[6][j]=INV_SQRT8*(x1+x2-x9);
-            b[2][j]=INV_SQRT8*(x1-x2+x10); b[5][j]=INV_SQRT8*(x1-x2-x10);
-            b[3][j]=INV_SQRT8*(x0-x3+x11); b[4][j]=INV_SQRT8*(x0-x3-x11);
+        // Inverse Rows sequentially
+        for (int x = 0; x < 8; ++x) {
+            for (int y = 0; y < 8; ++y) {
+                double sum = 0.0;
+                for (int u = 0; u < 8; ++u) {
+                    double cu = (u == 0) ? 1.0 / std::sqrt(2.0) : 1.0;
+                    sum += cu * tmp[u][y] * std::cos((2 * x + 1) * u * pi / 16.0);
+                }
+                b[x][y] = sum * 0.5;
+            }
         }
     }
 
-    // ── Luma helpers ──────────────────────────────────────────────────────────
     static CImg<double> extractLuma(const CImg<unsigned char>& img)
     {
         CImg<double> luma(img.width(), img.height(), 1, 1);
@@ -514,27 +506,16 @@ private:
         return luma;
     }
 
+    // UPDATED: Fixed truncation noise by using safe pixel-rounding matrix layers
     static CImg<unsigned char> writeLuma(const CImg<unsigned char>& orig,
                                           const CImg<double>& luma)
     {
         CImg<unsigned char> out = orig;
-        if (orig.spectrum() == 1) {
-            cimg_forXY(out, x, y)
-                out(x, y) = static_cast<unsigned char>(
-                    std::max(0.0, std::min(255.0, luma(x, y))));
-        } else {
-            cimg_forXY(orig, x, y) {
-                const double orig_luma = 0.299 * orig(x,y,0,0)
-                                       + 0.587 * orig(x,y,0,1)
-                                       + 0.114 * orig(x,y,0,2);
-                double scale = (orig_luma > 1e-6)
-                               ? (luma(x, y) / orig_luma) : 1.0;
-                scale = std::max(0.0, std::min(2.0, scale));
-                for (int c = 0; c < 3; ++c) {
-                    const double v = orig(x, y, 0, c) * scale;
-                    out(x, y, 0, c) = static_cast<unsigned char>(
-                        std::max(0.0, std::min(255.0, v)));
-                }
+        cimg_forXY(out, x, y) {
+            double val = std::round(std::max(0.0, std::min(255.0, luma(x, y))));
+            unsigned char pixel_val = static_cast<unsigned char>(val);
+            for (int c = 0; c < out.spectrum(); ++c) {
+                out(x, y, 0, c) = pixel_val;
             }
         }
         return out;
@@ -555,7 +536,6 @@ private:
                     std::max(0.0, std::min(255.0, blk[x][y]));
     }
 
-    // ── stb loader ───────────────────────────────────────────────────────────
     static CImg<unsigned char> loadImageStb(const std::string& path)
     {
         int w = 0, h = 0, channels = 0;
@@ -576,7 +556,6 @@ private:
         return img;
     }
 
-    // ── Save helpers ──────────────────────────────────────────────────────────
     static bool savePng(const std::string& path, const CImg<unsigned char>& img)
     {
         const int W = img.width(), H = img.height(), C = img.spectrum();
@@ -606,13 +585,12 @@ private:
         }
     }
 
-    // ── Hex dump helper for diagnostics ───────────────────────────────────────
     static std::string hexDump(const std::string& s)
     {
         std::ostringstream o;
         o << std::hex << std::setfill('0');
         for (size_t i = 0; i < std::min(s.size(), size_t(32)); ++i)
-            o << std::setw(2) << (unsigned char)s[i];
+            o << std::setw(2) << static_cast<unsigned char>(s[i]);
         if (s.size() > 32) o << "...";
         return o.str();
     }

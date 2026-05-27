@@ -1,14 +1,10 @@
 // lib/features/scanner/scanner_screen.dart
-//
-// Gate-staff ticket scanner.
-// The C++ layer uses stb_image for decoding, which natively supports JPEG,
-// PNG, and BMP — no Dart-side format conversion is required.
 
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -43,6 +39,7 @@ final class VerificationInterrupted extends ScanError {
 class _AutoDeleteFile {
   final String path;
   bool _deleted = false;
+
   _AutoDeleteFile(this.path);
 
   void dispose() {
@@ -67,37 +64,36 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   String _statusMessage = '';
   Future<void>? _pendingScan;
 
-  // ── Safe setState ─────────────────────────────────────────────────────
   void _safeSetState(VoidCallback fn) {
     if (mounted) setState(fn);
   }
 
   void _setStatus(String msg) => _safeSetState(() => _statusMessage = msg);
 
-  // ── Image sources ─────────────────────────────────────────────────────
-  Future<void> _scanWithCamera() => _startScan(ImageSource.camera);
-  Future<void> _pickFromGallery() => _startScan(ImageSource.gallery);
-
-  Future<void> _startScan(ImageSource source) async {
+  // ── File Picker ─────────────────────────────────────────────────────────
+  Future<void> _pickImageFile() async {
     if (_pendingScan != null) return;
     final completer = Completer<void>();
     _pendingScan = completer.future;
 
     try {
-      final picked = await ImagePicker().pickImage(
-        source: source,
-        // FIX: Do NOT set maxWidth, maxHeight, OR imageQuality.
-        //
-        // On Android, any of these parameters force the platform to decode
-        // the original file to a Bitmap and re-encode it before returning
-        // the path to Dart. Re-encoding alters every DCT coefficient and
-        // silently destroys the steganographic payload, causing
-        // extractAndVerify() to always return false (tampered).
-        //
-        // By leaving all three null, the plugin returns the original file
-        // bytes untouched.
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['png', 'jpg', 'jpeg', 'bmp'],
+        allowMultiple: false,
+        withData: false, // We only need path
       );
-      if (picked != null) await _verifyImage(picked.path);
+
+      if (result == null || result.files.isEmpty) return;
+
+      final file = result.files.first;
+      if (file.path == null) {
+        throw const ImageReadError('Could not access selected file');
+      }
+
+      await _verifyImage(file.path!);
+    } catch (e) {
+      _showError('Failed to pick file: $e');
     } finally {
       completer.complete();
       _pendingScan = null;
@@ -113,32 +109,23 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
     final tempDir = await getTemporaryDirectory();
     final ts = DateTime.now().millisecondsSinceEpoch;
-    final ext = sourcePath.contains('.')
-        ? sourcePath.split('.').last.toLowerCase()
-        : 'jpg';
+    final ext = sourcePath.split('.').last.toLowerCase();
 
-    // Persist a stable copy — the picker's temp path may be evicted.
-    final String persistentPath;
+    // Create a stable copy
+    final String persistentPath = '${tempDir.path}/scan_orig_$ts.$ext';
+    final persistentFile = _AutoDeleteFile(persistentPath);
+
     try {
       final src = File(sourcePath);
       if (!await src.exists()) {
         throw const ImageReadError('Source image no longer exists');
       }
-      persistentPath = '${tempDir.path}/scan_orig_$ts.$ext';
+
       await src.copy(persistentPath);
-    } on ScanError {
-      rethrow;
-    } catch (e) {
-      throw ImageReadError('Could not read image: $e');
-    }
 
-    final persistentFile = _AutoDeleteFile(persistentPath);
-
-    try {
       final fileBytes = await File(persistentPath).length();
       if (fileBytes < 1024) {
-        throw ImageReadError(
-            'Image too small (${fileBytes}B) — likely corrupt');
+        throw ImageReadError('Image too small (${fileBytes}B)');
       }
 
       debugPrint(
@@ -155,7 +142,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       if (eventNames.isEmpty) throw const NoChainsError();
 
-      // FFI verification — C++ stb_image reads JPEG, PNG, and BMP natively
+      // Run verification
       final result = await _runVerification(ffi, eventNames, persistentPath);
 
       // Supabase cross-check
@@ -201,7 +188,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     }
   }
 
-  // ── Verification loop ─────────────────────────────────────────────────
+  // ── Verification loop (unchanged) ─────────────────────────────────────
   Future<_ScanResult> _runVerification(
     EventChainFFI ffi,
     List<String> eventNames,
@@ -238,7 +225,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     return const _ScanResult(verified: false);
   }
 
-  // ── Chain download ────────────────────────────────────────────────────
+  // ── Chain download & Supabase (unchanged) ─────────────────────────────
   Future<List<String>> _tryDownloadChains() async {
     try {
       final supabase = Supabase.instance.client;
@@ -250,7 +237,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       final notifier = ref.read(eventsProvider.notifier);
       final events = List<Map<String, dynamic>>.from(rows);
 
-      // Download up to 4 chains concurrently
       final chunks = _chunk(events, 4);
       for (final chunk in chunks) {
         await Future.wait(chunk.map((row) async {
@@ -271,8 +257,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           list.sublist(i, (i + size < list.length) ? i + size : list.length),
       ];
 
-  // ── Supabase lookups ──────────────────────────────────────────────────
-
   Future<Map<String, dynamic>?> _supabaseLookupByBlock(
     String eventName,
     int blockIndex,
@@ -290,14 +274,12 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     }
   }
 
-  /// Fallback: perceptual hash lookup (not yet implemented).
   Future<Map<String, dynamic>?> _supabaseLookupByImageHash(
       String imagePath) async {
-    // TODO: implement ImageHasher.perceptualHash(imagePath)
+    // TODO: implement perceptual hash lookup
     return null;
   }
 
-  // ── UI helpers ────────────────────────────────────────────────────────
   void _showError(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -349,15 +331,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               style: AppTheme.merri(fontSize: 18, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 10),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 200),
-              child: Text(
-                _statusMessage,
-                key: ValueKey(_statusMessage),
-                textAlign: TextAlign.center,
-                style:
-                    AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
-              ),
+            Text(
+              _statusMessage,
+              textAlign: TextAlign.center,
+              style: AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
             ),
           ],
         ),
@@ -383,19 +360,19 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               ),
             ),
             child: const Icon(
-              Icons.qr_code_scanner_rounded,
+              Icons.image_rounded,
               size: 80,
               color: AppTheme.primaryColor,
             ),
           ),
           const SizedBox(height: 40),
           Text(
-            'Scan Ticket',
+            'Select Ticket Image',
             style: AppTheme.merri(fontSize: 24, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
           Text(
-            'Point the camera at a ticket image\nor pick one from your gallery.',
+            'Pick a PNG, JPG, or BMP file containing\nan embedded ticket.',
             textAlign: TextAlign.center,
             style: AppTheme.sans(fontSize: 14, color: AppTheme.subTextColor),
           ),
@@ -413,10 +390,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),
-                onPressed: _scanWithCamera,
-                icon: const Icon(Icons.camera_alt, size: 22),
+                onPressed: _pickImageFile,
+                icon: const Icon(Icons.folder_open, size: 22),
                 label: Text(
-                  'OPEN CAMERA',
+                  'PICK IMAGE FILE',
                   style: AppTheme.sans(
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
@@ -424,19 +401,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                   ),
                 ),
               ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          TextButton.icon(
-            onPressed: _pickFromGallery,
-            icon: const Icon(
-              Icons.photo_library_outlined,
-              color: AppTheme.subTextColor,
-              size: 20,
-            ),
-            label: Text(
-              'Choose from Gallery',
-              style: AppTheme.sans(fontSize: 14, color: AppTheme.subTextColor),
             ),
           ),
           const SizedBox(height: 60),
@@ -451,6 +415,7 @@ class _ScanResult {
   final bool verified;
   final String? eventName;
   final int? blockIndex;
+
   const _ScanResult({
     required this.verified,
     this.eventName,

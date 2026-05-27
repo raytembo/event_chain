@@ -29,6 +29,7 @@ dependencies:
   # Image I/O
   image: ^4.8.0
   image_picker: ^1.2.1
+  file_picker: ^8.0.7
   
 
   # QR

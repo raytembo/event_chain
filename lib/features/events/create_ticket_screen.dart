@@ -1,5 +1,7 @@
 // lib/features/events/create_ticket_screen.dart
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -214,6 +216,9 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
           'What would you like to do with the ticket image?',
         ),
         actions: [
+          // Make sure you have this import at the top of the file:
+// import 'dart:io';
+
           TextButton.icon(
             icon: const Icon(Icons.save_alt, color: AppTheme.primaryColor),
             label: Text('Save to Gallery',
@@ -221,12 +226,34 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
             onPressed: () async {
               Navigator.pop(ctx);
               try {
-                await Gal.putImage(stegoPath);
-                _showSnack('Ticket saved to your gallery!');
+                final file = File(stegoPath);
+                final lowerPath = stegoPath.toLowerCase();
+                String pathToSave = stegoPath;
+
+                // 1. FIX FOR SAMSUNG: Ensure the file has a valid image extension.
+                // Samsung Gallery ignores files without .png/.jpg/.jpeg extensions.
+                if (!lowerPath.endsWith('.png') &&
+                    !lowerPath.endsWith('.jpg') &&
+                    !lowerPath.endsWith('.jpeg')) {
+                  final newPath =
+                      '${file.parent.path}/ticket_${DateTime.now().millisecondsSinceEpoch}.png';
+                  final newFile = await file.copy(newPath);
+                  pathToSave = newFile.path;
+                }
+
+                // 2. Use the 'album' parameter to create a dedicated folder
+                // named "EventChain" in the Samsung Gallery app.
+                await Gal.putImage(pathToSave, album: 'EventChain');
+
+                if (mounted) {
+                  _showSnack('Saved to "EventChain" folder in Gallery!');
+                }
               } on GalException catch (e) {
-                _showSnack('Could not save: ${e.type}', isError: true);
+                if (mounted) {
+                  _showSnack('Could not save: ${e.type}', isError: true);
+                }
               } catch (e) {
-                _showSnack('Could not save: $e', isError: true);
+                if (mounted) _showSnack('Could not save: $e', isError: true);
               }
             },
           ),
