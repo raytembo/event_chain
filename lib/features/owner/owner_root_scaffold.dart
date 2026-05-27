@@ -24,7 +24,6 @@ class _OwnerRootScaffoldState extends ConsumerState<OwnerRootScaffold> {
   static const _screens = [
     EventsScreen(),
     ScannerScreen(),
-    AttendeeExportScreen(),
     SettingsScreen(), // ← 4th tab added
   ];
 
@@ -116,11 +115,6 @@ class _OwnerRootScaffoldState extends ConsumerState<OwnerRootScaffold> {
                 icon: Icon(Icons.qr_code_scanner_outlined),
                 selectedIcon: Icon(Icons.qr_code_scanner),
                 label: 'Scanner',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.download_outlined),
-                selectedIcon: Icon(Icons.download),
-                label: 'Export',
               ),
               NavigationDestination(
                 // ← New Settings button/tab
