@@ -432,7 +432,7 @@ private:
         return ((k % 2) + 2) % 2;
     }
 
-    // UPDATED: High-precision Separable 2D Orthogonal Discrete Cosine Transform (DCT-II)
+    // High-precision Separable 2D Orthogonal Discrete Cosine Transform (DCT-II)
     static void fastDct8x8(double b[8][8])
     {
         double tmp[8][8];
@@ -462,7 +462,7 @@ private:
         }
     }
 
-    // UPDATED: Symmetrical High-precision Separable 2D Inverse DCT (DCT-III)
+    // Symmetrical High-precision Separable 2D Inverse DCT (DCT-III)
     static void fastIdct8x8(double b[8][8])
     {
         double tmp[8][8];
@@ -506,16 +506,35 @@ private:
         return luma;
     }
 
-    // UPDATED: Fixed truncation noise by using safe pixel-rounding matrix layers
+    // UPDATED: Restores original color by applying the luma difference to RGB channels
     static CImg<unsigned char> writeLuma(const CImg<unsigned char>& orig,
                                           const CImg<double>& luma)
     {
         CImg<unsigned char> out = orig;
+        
+        // Handle strictly grayscale images
+        if (out.spectrum() == 1) {
+            cimg_forXY(out, x, y) {
+                double val = std::round(std::max(0.0, std::min(255.0, luma(x, y))));
+                out(x, y) = static_cast<unsigned char>(val);
+            }
+            return out;
+        }
+
+        // Handle color (RGB) images
         cimg_forXY(out, x, y) {
-            double val = std::round(std::max(0.0, std::min(255.0, luma(x, y))));
-            unsigned char pixel_val = static_cast<unsigned char>(val);
+            // 1. Re-calculate the original Luma for this pixel
+            double orig_Y = 0.299 * orig(x,y,0,0) 
+                          + 0.587 * orig(x,y,0,1) 
+                          + 0.114 * orig(x,y,0,2);
+            
+            // 2. Find the difference caused by the stego embedding
+            double diff = luma(x, y) - orig_Y;
+            
+            // 3. Apply the difference equally to all color channels
             for (int c = 0; c < out.spectrum(); ++c) {
-                out(x, y, 0, c) = pixel_val;
+                double new_val = orig(x, y, 0, c) + diff;
+                out(x, y, 0, c) = static_cast<unsigned char>(std::round(std::max(0.0, std::min(255.0, new_val))));
             }
         }
         return out;
