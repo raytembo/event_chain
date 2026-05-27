@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -48,10 +49,93 @@ class _EventChainAppState extends State<EventChainApp> {
       title: 'EventChain',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark(),
-      home: const _AuthRouter(),
+      home: const _DebugOverlay(child: _AuthRouter()),
     );
   }
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TEMPORARY DEBUG WIDGET — tap the red bug button to run the native self-test
+// ═════════════════════════════════════════════════════════════════════════════
+
+class _DebugOverlay extends StatelessWidget {
+  final Widget child;
+  const _DebugOverlay({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        child,
+        Positioned(
+          top: MediaQuery.of(context).padding.top + 8,
+          right: 12,
+          child: SafeArea(
+            child: FloatingActionButton.small(
+              heroTag: 'selfTestFab',
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              onPressed: () => _runSelfTest(context),
+              child: const Icon(Icons.bug_report),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _runSelfTest(BuildContext context) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Running native self-test…')),
+    );
+
+    try {
+      final tmp = await getTemporaryDirectory();
+      final report = EventChainFFI.instance.selfTest(workDir: tmp.path);
+
+      if (!context.mounted) return;
+
+      await showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1D21),
+          title: const Text('Self-Test Report'),
+          content: SingleChildScrollView(
+            child: SelectableText(
+              report,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+                color: Colors.white70,
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Clipboard.setData(ClipboardData(text: report)),
+              child: const Text('COPY'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('CLOSE'),
+            ),
+          ],
+        ),
+      );
+    } catch (e, stack) {
+      debugPrint('[SelfTest] ERROR: $e\n$stack');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Self-test crashed: $e')),
+        );
+      }
+    }
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// AUTH ROUTER
+// ═════════════════════════════════════════════════════════════════════════════
 
 class _AuthRouter extends ConsumerWidget {
   const _AuthRouter();
@@ -60,7 +144,6 @@ class _AuthRouter extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authProvider);
 
-    // Full-screen loader while session is being restored on first frame.
     if (!auth.isLoggedIn && auth.loading) {
       return const Scaffold(
         backgroundColor: Color(0xFF0D1117),
@@ -72,11 +155,10 @@ class _AuthRouter extends ConsumerWidget {
 
     if (!auth.isLoggedIn) return const LoginScreen();
 
-    // Switch on the concrete UserRole value — null case handled above.
     return switch (auth.role) {
       UserRole.owner => const OwnerRootScaffold(),
       UserRole.customer => const CustomerRootScaffold(),
-      _ => const LoginScreen(), // covers null + future roles
+      _ => const LoginScreen(),
     };
   }
 }

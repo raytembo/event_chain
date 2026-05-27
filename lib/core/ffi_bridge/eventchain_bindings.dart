@@ -38,7 +38,14 @@ typedef GetTicketJsonDart = Pointer<Utf8> Function(
 typedef ListEventsNative = Pointer<Utf8> Function(Pointer<Void>);
 typedef ListEventsDart = Pointer<Utf8> Function(Pointer<Void>);
 
-// ── Steganography typedefs ────────────────────────────────────────────────────
+// ── NEW: lastError + selfTest typedefs ───────────────────────────────────────
+typedef LastErrorNative = Pointer<Utf8> Function();
+typedef LastErrorDart = Pointer<Utf8> Function();
+
+typedef SelfTestNative = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
+typedef SelfTestDart = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
+
+// ── Steganography typedefs ─────────────────────────────────────────────────
 typedef GenCoverNative = Int32 Function(Pointer<Utf8>, Int32, Int32);
 typedef GenCoverDart = int Function(Pointer<Utf8>, int, int);
 
@@ -58,7 +65,7 @@ typedef CapacityDart = int Function(int, int);
 typedef VersionNative = Pointer<Utf8> Function();
 typedef VersionDart = Pointer<Utf8> Function();
 
-// ── EventChainBindings ────────────────────────────────────────────────────────
+// ── EventChainBindings ─────────────────────────────────────────────────────
 class EventChainBindings {
   final DynamicLibrary _lib;
 
@@ -96,7 +103,13 @@ class EventChainBindings {
       _lib.lookupFunction<ListEventsNative, ListEventsDart>(
           'eventchain_list_events');
 
-  // ── Steganography ──────────────────────────────────────────────────────────
+  // ── NEW: lastError + selfTest bindings ────────────────────────────────────
+  late final LastErrorDart lastError = _lib
+      .lookupFunction<LastErrorNative, LastErrorDart>('eventchain_last_error');
+  late final SelfTestDart selfTest =
+      _lib.lookupFunction<SelfTestNative, SelfTestDart>('eventchain_self_test');
+
+  // ── Steganography ─────────────────────────────────────────────────────────
   late final GenCoverDart generateCover =
       _lib.lookupFunction<GenCoverNative, GenCoverDart>(
           'eventchain_generate_cover');

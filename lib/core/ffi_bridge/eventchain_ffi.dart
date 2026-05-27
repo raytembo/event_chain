@@ -13,19 +13,6 @@ import '../models/ticket_model.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Image Format Constants
-//
-// The C++ steganography layer (stb_image_write + CImg) supports exactly two
-// lossless output formats:
-//
-//   png  — written via stb_image_write  ✓ recommended for stego output
-//   bmp  — written via CImg             ✓ accepted
-//
-// JPEG and WebP are NOT listed here. Both are rejected by the C++ layer
-// (returns -1) because lossy re-quantisation destroys the embedded payload.
-// There is also no Dart-side image-processing package in this project to
-// perform the conversion. If lossy sharing is ever needed, add a package
-// (e.g. flutter_image_compress) and convert AFTER the stego PNG is produced —
-// never pass a lossy file back into embedTicket() or extractAndVerify().
 // ─────────────────────────────────────────────────────────────────────────────
 class ImageFormat {
   static const int png = 0;
@@ -74,6 +61,29 @@ class EventChainFFI {
     final s = ptr.toDartString();
     _bindings.freeString(ptr);
     return s;
+  }
+
+  // ── NEW: read the C thread-local last-error string (do NOT free) ──────────
+  String? get lastErrorMessage {
+    final ptr = _bindings.lastError();
+    if (ptr == nullptr) return null;
+    return ptr.toDartString(); // C owns this buffer
+  }
+
+  // ── NEW: native self-test ─────────────────────────────────────────────────
+  String selfTest({required String workDir}) {
+    final dirPtr = workDir.toNativeUtf8();
+    try {
+      final rPtr = _bindings.selfTest(_handle, dirPtr);
+      if (rPtr == nullptr) {
+        throw Exception(
+          'Self-test failed: ${lastErrorMessage ?? "unknown error"}',
+        );
+      }
+      return _readAndFree(rPtr);
+    } finally {
+      calloc.free(dirPtr);
+    }
   }
 
   // ── Blockchain ────────────────────────────────────────────────────────────

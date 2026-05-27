@@ -1,55 +1,6 @@
-// =============================================================================
-//  steganography.h  –  Real DCT steganography with multi-coefficient embedding
-//
-//  WHAT CHANGED vs the previous version:
-//
-//  PNG read fix (root cause of "Could not generate your ticket image")
-//  ──────────────────────────────────────────────────────────────────
-//  The old code called img.load(path) which dispatches to CImg's internal
-//  load_png().  On Android NDK, load_png() requires libpng (cimg_use_png).
-//  libpng is not linked in this build.  The newer cimg_use_stb alternative
-//  only works with CImg ≥ 3.1 and is silently ignored by older versions.
-//
-//  Fix: bypass CImg's loader completely for image reading.
-//  A new private helper loadImageStb() calls stbi_load() directly and
-//  constructs the CImg object from raw pixel data.  stb_image is already
-//  compiled into the binary (STB_IMAGE_IMPLEMENTATION in eventchain_ffi.cpp),
-//  so no additional dependency is added.
-//
-//  The function prototypes are forward-declared here as extern "C" rather
-//  than re-including stb_image.h, which avoids include-order sensitivity.
-//
-//  MAX_IMAGE_DIMENSION resize fix (secondary silent failure)
-//  ─────────────────────────────────────────────────────────
-//  The old code hard-rejected any cover image wider or taller than
-//  MAX_IMAGE_DIMENSION (1024 px) with a plain return false.  Event posters
-//  from Supabase are commonly 1080 px or larger.  After the PNG-load fix
-//  revealed this, embed() would still return false for real-world posters.
-//
-//  Fix: rescale to MAX_IMAGE_DIMENSION (aspect-ratio preserving, snapped to
-//  the nearest 8-pixel boundary so DCT block alignment is maintained).
-//
-//  CRASH FIXES (May 2026)
-//  ───────────────────────
-//  1. loadImageStb() now requests 3 channels (desired_channels = 3) so
-//     CImg always has RGB data.  Previously a grayscale/alpha PNG (2 ch)
-//     caused extractLuma() / writeLuma() to access img(x,y,0,2) out of bounds.
-//  2. extract() length check replaced with an overflow-safe formula:
-//        len > (bits.size() - 64) / 8
-//     The old check `64u + len * 8u` wrapped on large random `len` values
-//     (from scanning non-stego images), causing a read past the end of the
-//     `bits` vector → SIGSEGV / SEGV_ACCERR.
-//
-//  Everything else is unchanged:
-//   - Multi-coefficient embedding (5 bits / 8×8 block).
-//   - Key-based coefficient selection (FNV-1a + Fisher-Yates per block).
-//   - QIM step 16.
-//   - Zigzag mid-frequency band (positions 5–27).
-//   - Adler-32 checksum header.
-//   - AAN fast DCT/IDCT.
-//   - PNG/BMP-only output enforcement.
-//   - stb_image_write for PNG save (unchanged).
-// =============================================================================
+// steganography.h  –  DIAGNOSTIC EDITION
+// Drop-in replacement.  Adds selfTestRoundtrip(), diagnosticExtract(),
+// and detailed error strings so we know WHY extraction fails.
 
 #ifndef STEGANOGRAPHY_H
 #define STEGANOGRAPHY_H
@@ -59,28 +10,11 @@
 #endif
 
 #include "CImg.h"
-
-// ---------------------------------------------------------------------------
-//  stb function forward declarations
-//
-//  stbi_write_png  — implementation compiled via STB_IMAGE_WRITE_IMPLEMENTATION
-//                    in eventchain_ffi.cpp (unchanged from before).
-//  stbi_load       — implementation compiled via STB_IMAGE_IMPLEMENTATION
-//                    in eventchain_ffi.cpp (new).
-//  stbi_image_free — companion free for stbi_load return value.
-//
-//  Forward-declaring rather than re-including the headers avoids:
-//   (a) include-order sensitivity (STB_IMAGE_IMPLEMENTATION must precede the
-//       first #include "stb_image.h" in the translation unit), and
-//   (b) multiple-definition errors if another header already included them.
-// ---------------------------------------------------------------------------
 extern "C" {
     int           stbi_write_png(const char* filename, int w, int h,
                                  int comp, const void* data, int stride_bytes);
-
     unsigned char* stbi_load(const char* filename, int* x, int* y,
                              int* channels_in_file, int desired_channels);
-
     void           stbi_image_free(void* retval_from_stbi_load);
 }
 
@@ -92,20 +26,14 @@ extern "C" {
 #include <stdexcept>
 #include <algorithm>
 #include <iostream>
+#include <sstream>
+#include <iomanip>
 #include <numeric>
 #include <functional>
 #include "config.h"
 
 using namespace cimg_library;
 
-// =============================================================================
-//  Zigzag scan table for an 8×8 DCT block
-//  Entry [k] = {row, col} of the k-th coefficient in zigzag order.
-//  Position 0 = DC. Positions 1–63 = AC coefficients from low to high freq.
-//  We embed only in positions 5–27 (mid-frequency band):
-//    • DC (pos 0) and low-AC (1-4) carry most visible energy — avoid them.
-//    • High-AC (pos 28+) are near-zero after IDCT; QIM there is unstable.
-// =============================================================================
 static constexpr int ZIGZAG[64][2] = {
         {0,0}, {0,1}, {1,0}, {2,0}, {1,1}, {0,2}, {0,3}, {1,2},
         {2,1}, {3,0}, {4,0}, {3,1}, {2,2}, {1,3}, {0,4}, {0,5},
@@ -117,28 +45,31 @@ static constexpr int ZIGZAG[64][2] = {
         {6,5}, {7,4}, {7,5}, {6,6}, {5,7}, {6,7}, {7,6}, {7,7}
 };
 
-// Mid-frequency band: zigzag positions 5 through 27 inclusive (23 coefficients).
-// We pick BITS_PER_BLOCK of them per block; the key determines which 5.
 static constexpr int ZIGZAG_MID_START = 5;
-static constexpr int ZIGZAG_MID_END   = 27;   // inclusive
-static constexpr int ZIGZAG_MID_COUNT = ZIGZAG_MID_END - ZIGZAG_MID_START + 1; // 23
-static constexpr int BITS_PER_BLOCK   = 5;    // bits embedded per 8×8 block
-static constexpr double QIM_Q         = 16.0; // quantization step
+static constexpr int ZIGZAG_MID_END   = 27;
+static constexpr int ZIGZAG_MID_COUNT = ZIGZAG_MID_END - ZIGZAG_MID_START + 1;
+static constexpr int BITS_PER_BLOCK   = 5;
+// FIX: use the config macro so the step size can be tuned from config.h
+static constexpr double QIM_Q         = STEGO_QIM_STEP;
 
-// =============================================================================
-enum class ImageFormat {
-    BMP, PNG, JPEG, WEBP, TIFF, PNM, UNKNOWN
+enum class ImageFormat { BMP, PNG, JPEG, WEBP, TIFF, PNM, UNKNOWN };
+
+// ── Diagnostic result for extract ─────────────────────────────────────────────
+struct ExtractResult {
+    bool        success = false;
+    std::string payload;          // valid only if success==true
+    std::string error;            // human-readable failure reason
+    std::size_t bitsRead = 0;
+    std::uint32_t headerLen = 0;
+    std::uint32_t headerChk = 0;
+    std::uint32_t computedChk = 0;
+    int         blocksUsed = 0;
+    int         imageW = 0, imageH = 0;
 };
 
-// =============================================================================
 class DCTSteganography
 {
 public:
-
-    // -------------------------------------------------------------------------
-    //  generateCover() — synthesise a lossless cover image.
-    //  Unchanged from previous version.
-    // -------------------------------------------------------------------------
     static bool generateCover(const std::string& outputPath,
             int W = 512, int H = 512,
             ImageFormat fmt = ImageFormat::PNG)
@@ -168,10 +99,6 @@ public:
         return ok;
     }
 
-    // -------------------------------------------------------------------------
-    //  capacity() — bytes that fit in an image of given dimensions.
-    //  Header overhead: 32 bits (length) + 32 bits (checksum) = 8 bytes.
-    // -------------------------------------------------------------------------
     static std::size_t capacity(int W, int H)
     {
         int blocksW = W / 8;
@@ -181,77 +108,52 @@ public:
         return (totalBits - 64u) / 8u;
     }
 
-    // -------------------------------------------------------------------------
-    //  embed() — hide payload in cover image, write to stegoPath.
-    //
-    //  Changes from previous version:
-    //   1. img.load() replaced with loadImageStb() — reads via stbi_load,
-    //      works on PNG/JPEG/BMP/WebP without libpng or libjpeg.
-    //   2. MAX_IMAGE_DIMENSION hard-reject replaced with proportional rescale
-    //      snapped to the nearest 8-pixel boundary.
-    // -------------------------------------------------------------------------
+    // ── Classic embed (unchanged logic, added logging) ───────────────────────
     static bool embed(const std::string& coverPath,
             const std::string& stegoPath,
             const std::string& payload,
             const std::string& key = "")
     {
-        // ── Load cover via stb_image (replaces img.load()) ───────────────────
         CImg<unsigned char> img;
-        try {
-            img = loadImageStb(coverPath);
-        } catch (const std::exception& e) {
-            std::cerr << "  [Stego] Cannot load cover (" << coverPath
-                      << "): " << e.what() << "\n";
+        try { img = loadImageStb(coverPath); }
+        catch (const std::exception& e) {
+            std::cerr << "  [Stego-ERR] Cannot load cover: " << e.what() << "\n";
             return false;
         }
 
-        // ── Rescale if needed (replaces hard reject) ─────────────────────────
-        //
-        // Hard-rejecting images over MAX_IMAGE_DIMENSION silently failed for
-        // any real-world event poster (commonly 1080 px or larger).  We now
-        // scale down proportionally and snap to the nearest 8-pixel boundary
-        // so that DCT block alignment (8×8 grid) is always preserved.
+        // Rescale if needed
         if (img.width() > MAX_IMAGE_DIMENSION || img.height() > MAX_IMAGE_DIMENSION) {
             int newW, newH;
             if (img.width() >= img.height()) {
                 newW = MAX_IMAGE_DIMENSION;
                 newH = static_cast<int>(
-                    static_cast<double>(img.height()) * MAX_IMAGE_DIMENSION
-                    / img.width());
+                    static_cast<double>(img.height()) * MAX_IMAGE_DIMENSION / img.width());
             } else {
                 newH = MAX_IMAGE_DIMENSION;
                 newW = static_cast<int>(
-                    static_cast<double>(img.width()) * MAX_IMAGE_DIMENSION
-                    / img.height());
+                    static_cast<double>(img.width()) * MAX_IMAGE_DIMENSION / img.height());
             }
-            // Snap both dimensions to the nearest lower multiple of 8.
             newW = (newW / 8) * 8;
             newH = (newH / 8) * 8;
             if (newW < 8 || newH < 8) {
-                std::cerr << "  [Stego] Cover too small after rescale ("
-                          << newW << "x" << newH << ").\n";
+                std::cerr << "  [Stego-ERR] Cover too small after rescale.\n";
                 return false;
             }
-            // CImg resize interpolation mode 3 = grid/bilinear.
             img.resize(newW, newH, 1, img.spectrum(), 3);
-            std::cout << "  [Stego] Cover rescaled to " << newW
-                      << "x" << newH << " (8-px aligned)\n";
+            std::cout << "  [Stego] Cover rescaled to " << newW << "x" << newH << "\n";
         }
 
-        // ── Capacity check ───────────────────────────────────────────────────
         const int W = img.width(), H = img.height();
         const std::size_t cap = capacity(W, H);
         if (payload.size() > cap) {
-            std::cerr << "  [Stego] Payload too large: " << payload.size()
+            std::cerr << "  [Stego-ERR] Payload too large: " << payload.size()
                       << " B vs capacity " << cap << " B\n";
             return false;
         }
 
-        // ── Build bitstream: [32-bit length][32-bit checksum][payload bits] ────
         const std::uint32_t chk = checksum32(payload);
         std::vector<int> bits = buildBitstream(payload, chk);
 
-        // ── DCT embedding ────────────────────────────────────────────────────
         CImg<double> luma = extractLuma(img);
         KeyedCoeffSelector sel(key);
 
@@ -279,53 +181,52 @@ public:
             ++bx;
         }
 
-        // ── Write stego image ────────────────────────────────────────────────
         CImg<unsigned char> result = writeLuma(img, luma);
         const ImageFormat fmt = detectFormat(stegoPath);
         if (fmt == ImageFormat::JPEG || fmt == ImageFormat::WEBP) {
-            std::cerr << "  [Stego] Lossy output rejected — use .png or .bmp.\n";
+            std::cerr << "  [Stego-ERR] Lossy output rejected.\n";
             return false;
         }
 
         const bool saved = saveImage(result, stegoPath, fmt);
-        if (saved)
+        if (saved) {
             std::cout << "  [Stego] Embedded " << payload.size()
-                      << " B -> " << stegoPath << "\n";
+                      << " B (chk=" << chk << ") -> " << stegoPath << "\n";
+        }
         return saved;
     }
 
-    // -------------------------------------------------------------------------
-    //  extract() — recover payload from stego image.
-    //  Must use the same key that was passed to embed().
-    //
-    //  Change from previous version:
-    //   img.load() replaced with loadImageStb() — same rationale as embed().
-    //
-    //  CRASH FIX:
-    //   Old length check `static_cast<int>(64u + len * 8u) > bits.size()`
-    //   overflows when `len` is large (random noise from non-stego images).
-    //   Replaced with `len > (bits.size() - 64) / 8` which is safe from
-    //   unsigned wrap-around.
-    // -------------------------------------------------------------------------
+    // ── Classic extract (kept for compat) ───────────────────────────────────
     static std::string extract(const std::string& stegoPath,
             const std::string& key = "")
     {
-        // ── Load stego image via stb_image (replaces img.load()) ────────────
+        auto r = diagnosticExtract(stegoPath, key);
+        return r.success ? r.payload : "";
+    }
+
+    // ── DIAGNOSTIC extract: tells you EXACTLY why it failed ──────────────────
+    static ExtractResult diagnosticExtract(const std::string& stegoPath,
+            const std::string& key = "")
+    {
+        ExtractResult res;
         CImg<unsigned char> img;
         try {
             img = loadImageStb(stegoPath);
         } catch (const std::exception& e) {
-            std::cerr << "  [Stego] Cannot load stego (" << stegoPath
-                      << "): " << e.what() << "\n";
-            return "";
+            res.error = std::string("loadImageStb failed: ") + e.what();
+            std::cerr << "  [Stego-ERR] " << res.error << "\n";
+            return res;
         }
 
+        res.imageW = img.width();
+        res.imageH = img.height();
         const int W = img.width(), H = img.height();
         const int numBlocksX = W / 8, numBlocksY = H / 8;
         const int totalBlocks = numBlocksX * numBlocksY;
         if (totalBlocks < 16) {
-            std::cerr << "  [Stego] Image too small.\n";
-            return "";
+            res.error = "Image too small for DCT (< 16 blocks)";
+            std::cerr << "  [Stego-ERR] " << res.error << "\n";
+            return res;
         }
 
         CImg<double> luma = extractLuma(img);
@@ -350,45 +251,87 @@ public:
             }
             ++bx;
         }
+        res.bitsRead = bits.size();
+        res.blocksUsed = totalBlocks;
 
-        // ── Parse header ──────────────────────────────────────────────────────
-        if (static_cast<int>(bits.size()) < 64) return "";
+        if (static_cast<int>(bits.size()) < 64) {
+            res.error = "Not enough bits for header (need 64, got " +
+                        std::to_string(bits.size()) + ")";
+            std::cerr << "  [Stego-ERR] " << res.error << "\n";
+            return res;
+        }
+
         std::uint32_t len = 0;
         for (int i = 0; i < 32; ++i) len = (len << 1) | bits[i];
         std::uint32_t storedChk = 0;
         for (int i = 0; i < 32; ++i) storedChk = (storedChk << 1) | bits[32 + i];
 
-        // ✅ CRASH FIX: overflow-safe bounds check.
-        // The old check `64u + len * 8u` wrapped when len ≥ 0x20000000,
-        // causing reads past the end of the `bits` vector.
+        res.headerLen = len;
+        res.headerChk = storedChk;
+
         if (len == 0 || len > (bits.size() - 64) / 8) {
-            std::cerr << "  [Stego] Invalid length header (" << len << ")\n";
-            return "";
+            res.error = "Invalid length header: " + std::to_string(len) +
+                        " (max valid: " + std::to_string((bits.size()-64)/8) + ")";
+            std::cerr << "  [Stego-ERR] " << res.error << "\n";
+            return res;
         }
 
-        // ── Reconstruct payload ───────────────────────────────────────────────
-        std::string result;
-        result.reserve(len);
+        std::string payload;
+        payload.reserve(len);
         for (std::uint32_t b = 0; b < len; ++b) {
             unsigned char byte = 0;
             for (int bit = 0; bit < 8; ++bit)
                 byte = (byte << 1) | static_cast<unsigned char>(bits[64 + b * 8 + bit]);
-            result += static_cast<char>(byte);
+            payload += static_cast<char>(byte);
         }
 
-        // ── Verify checksum ───────────────────────────────────────────────────
-        if (checksum32(result) != storedChk) {
-            std::cerr << "  [Stego] CHECKSUM MISMATCH — wrong key or corrupted image.\n";
-            return "";
+        res.computedChk = checksum32(payload);
+        if (res.computedChk != storedChk) {
+            res.error = "Checksum mismatch: stored=" + std::to_string(storedChk) +
+                        " computed=" + std::to_string(res.computedChk);
+            std::cerr << "  [Stego-ERR] " << res.error << "\n";
+            return res;
         }
 
-        std::cout << "  [Stego] Extracted " << len << " B from " << stegoPath << "\n";
-        return result;
+        res.success = true;
+        res.payload = payload;
+        std::cout << "  [Stego] Extracted " << len << " B, checksum OK\n";
+        return res;
     }
 
-    // -------------------------------------------------------------------------
-    //  Format helpers (unchanged)
-    // -------------------------------------------------------------------------
+    // ── SELF TEST: embed then extract immediately ─────────────────────────────
+    static std::string selfTestRoundtrip(const std::string& coverPath,
+                                          const std::string& stegoPath,
+                                          const std::string& payload,
+                                          const std::string& key = "")
+    {
+        std::ostringstream report;
+        report << "=== DCT Stego Self-Test ===\n";
+
+        bool emb = embed(coverPath, stegoPath, payload, key);
+        report << "Embed: " << (emb ? "OK" : "FAIL") << "\n";
+        if (!emb) return report.str();
+
+        auto ex = diagnosticExtract(stegoPath, key);
+        report << "Extract: " << (ex.success ? "OK" : "FAIL") << "\n";
+        if (!ex.success) {
+            report << "  Error: " << ex.error << "\n";
+            report << "  Image: " << ex.imageW << "x" << ex.imageH << "\n";
+            report << "  Bits:  " << ex.bitsRead << " (blocks=" << ex.blocksUsed << ")\n";
+            report << "  Header len=" << ex.headerLen << " chk=" << ex.headerChk << "\n";
+            return report.str();
+        }
+
+        report << "  Payload match: " << (ex.payload == payload ? "YES" : "NO") << "\n";
+        report << "  Bytes: expected=" << payload.size() << " got=" << ex.payload.size() << "\n";
+        if (ex.payload != payload) {
+            report << "  Expected: " << hexDump(payload) << "\n";
+            report << "  Got:      " << hexDump(ex.payload) << "\n";
+        }
+        return report.str();
+    }
+
+    // ── Format helpers ────────────────────────────────────────────────────────
     static ImageFormat detectFormat(const std::string& filename)
     {
         std::string ext;
@@ -409,74 +352,11 @@ public:
     static bool isFormatStegoCompatible(const std::string& filename)
     {
         const auto fmt = detectFormat(filename);
-        return fmt == ImageFormat::PNG
-            || fmt == ImageFormat::BMP
-            || fmt == ImageFormat::PNM;
+        return fmt == ImageFormat::PNG || fmt == ImageFormat::BMP || fmt == ImageFormat::PNM;
     }
 
 private:
-
-    // =========================================================================
-    //  loadImageStb()
-    //
-    //  Loads any image format supported by stb_image (PNG, JPEG, BMP, WebP,
-    //  TGA, HDR, PNM) into a CImg<unsigned char> without touching CImg's own
-    //  format-specific loaders (load_png, load_jpeg, …) which all require
-    //  external libraries not available in the Android NDK build.
-    //
-    //  CRASH FIX: desired_channels is now 3 instead of 0.
-    //  stbi_load(..., 3) always returns a 3-channel RGB buffer.  This prevents
-    //  extractLuma() and writeLuma() from accessing img(x,y,0,2) on images that
-    //  natively have only 1 or 2 channels (grayscale or grayscale+alpha).
-    //
-    //  CImg stores pixels in planar order:
-    //    img(x, y, z, c)  where c is the channel index.
-    //    channel 0: all R values, channel 1: all G values, …
-    //
-    //  The loop below converts from stb's interleaved layout to CImg's planar.
-    //
-    //  Throws std::runtime_error on failure so callers can catch and log.
-    // =========================================================================
-    static CImg<unsigned char> loadImageStb(const std::string& path)
-    {
-        int w = 0, h = 0, channels = 0;
-
-        // desired_channels = 3: force RGB so CImg always has 3 channels.
-        // This guarantees extractLuma() / writeLuma() can safely access c=0,1,2.
-        const int desiredChannels = 3;
-        unsigned char* px = stbi_load(path.c_str(), &w, &h, &channels, desiredChannels);
-
-        if (!px) {
-            throw std::runtime_error(
-                std::string("stbi_load failed for: ") + path);
-        }
-
-        if (w <= 0 || h <= 0) {
-            stbi_image_free(px);
-            throw std::runtime_error(
-                std::string("stbi_load returned invalid dimensions for: ") + path);
-        }
-
-        // Build CImg in planar layout from interleaved stb data.
-        CImg<unsigned char> img(w, h, 1, desiredChannels);
-        for (int y = 0; y < h; ++y) {
-            for (int x = 0; x < w; ++x) {
-                const int base = (y * w + x) * desiredChannels;
-                for (int c = 0; c < desiredChannels; ++c) {
-                    img(x, y, 0, c) = px[base + c];
-                }
-            }
-        }
-
-        stbi_image_free(px);
-        std::cout << "  [Stego] Loaded " << w << "x" << h
-                  << " ch=" << desiredChannels << " via stb: " << path << "\n";
-        return img;
-    }
-
-    // =========================================================================
-    //  KeyedCoeffSelector (unchanged)
-    // =========================================================================
+    // ── KeyedCoeffSelector ────────────────────────────────────────────────────
     class KeyedCoeffSelector {
     public:
         explicit KeyedCoeffSelector(const std::string& key)
@@ -485,7 +365,6 @@ private:
             for (unsigned char c : key)
                 keyHash_ = (keyHash_ ^ c) * 16777619u;
         }
-
         std::array<int, BITS_PER_BLOCK> positions(int blockIndex) const
         {
             std::array<int, ZIGZAG_MID_COUNT> pool;
@@ -499,22 +378,17 @@ private:
                     state % static_cast<uint32_t>(ZIGZAG_MID_COUNT - i));
                 std::swap(pool[i], pool[j]);
             }
-
             std::array<int, BITS_PER_BLOCK> result;
             for (int i = 0; i < BITS_PER_BLOCK; ++i)
                 result[i] = pool[i];
             return result;
         }
-
     private:
         uint32_t keyHash_;
-        static uint32_t lcg(uint32_t s)
-        { return s * 1664525u + 1013904223u; }
+        static uint32_t lcg(uint32_t s) { return s * 1664525u + 1013904223u; }
     };
 
-    // =========================================================================
-    //  Checksum — Adler-32 variant (unchanged)
-    // =========================================================================
+    // ── Checksum ──────────────────────────────────────────────────────────────
     static std::uint32_t checksum32(const std::string& data)
     {
         std::uint32_t a = 1, b = 0;
@@ -525,10 +399,6 @@ private:
         return (b << 16) | a;
     }
 
-    // =========================================================================
-    //  Bitstream layout: [32 bits: length][32 bits: Adler-32][N*8 payload bits]
-    //  (unchanged)
-    // =========================================================================
     static std::vector<int> buildBitstream(const std::string& s, std::uint32_t chk)
     {
         std::vector<int> bits;
@@ -542,9 +412,7 @@ private:
         return bits;
     }
 
-    // =========================================================================
-    //  QIM embed / extract (unchanged)
-    // =========================================================================
+    // ── QIM ───────────────────────────────────────────────────────────────────
     static void embedBit(double& coeff, int bit)
     {
         int k = static_cast<int>(std::floor(coeff / QIM_Q));
@@ -563,9 +431,7 @@ private:
         return ((k % 2) + 2) % 2;
     }
 
-    // =========================================================================
-    //  AAN Fast 8×8 DCT / IDCT (unchanged)
-    // =========================================================================
+    // ── AAN DCT ───────────────────────────────────────────────────────────────
     static constexpr double C1 = 0.9807852804032304;
     static constexpr double C2 = 0.9238795325112867;
     static constexpr double C3 = 0.8314696123025452;
@@ -633,9 +499,7 @@ private:
         }
     }
 
-    // =========================================================================
-    //  Pixel ↔ luma helpers (unchanged)
-    // =========================================================================
+    // ── Luma helpers ──────────────────────────────────────────────────────────
     static CImg<double> extractLuma(const CImg<unsigned char>& img)
     {
         CImg<double> luma(img.width(), img.height(), 1, 1);
@@ -691,9 +555,28 @@ private:
                     std::max(0.0, std::min(255.0, blk[x][y]));
     }
 
-    // =========================================================================
-    //  Image save dispatcher (unchanged)
-    // =========================================================================
+    // ── stb loader ───────────────────────────────────────────────────────────
+    static CImg<unsigned char> loadImageStb(const std::string& path)
+    {
+        int w = 0, h = 0, channels = 0;
+        const int desiredChannels = 3;
+        unsigned char* px = stbi_load(path.c_str(), &w, &h, &channels, desiredChannels);
+        if (!px) throw std::runtime_error("stbi_load failed: " + path);
+        if (w <= 0 || h <= 0) { stbi_image_free(px); throw std::runtime_error("bad dims"); }
+
+        CImg<unsigned char> img(w, h, 1, desiredChannels);
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                const int base = (y * w + x) * desiredChannels;
+                for (int c = 0; c < desiredChannels; ++c)
+                    img(x, y, 0, c) = px[base + c];
+            }
+        }
+        stbi_image_free(px);
+        return img;
+    }
+
+    // ── Save helpers ──────────────────────────────────────────────────────────
     static bool savePng(const std::string& path, const CImg<unsigned char>& img)
     {
         const int W = img.width(), H = img.height(), C = img.spectrum();
@@ -701,33 +584,37 @@ private:
         for (int y = 0; y < H; ++y)
             for (int x = 0; x < W; ++x)
                 for (int c = 0; c < C; ++c)
-                    buf[static_cast<std::size_t>((y * W + x) * C + c)] =
-                        img(x, y, 0, c);
+                    buf[static_cast<std::size_t>((y * W + x) * C + c)] = img(x, y, 0, c);
         const int ok = stbi_write_png(path.c_str(), W, H, C, buf.data(), W * C);
         if (!ok) std::cerr << "  [PNG] stbi_write_png failed: " << path << "\n";
         return ok != 0;
     }
 
     static bool saveImage(const CImg<unsigned char>& img,
-                          const std::string& path,
-                          ImageFormat fmt)
+                          const std::string& path, ImageFormat fmt)
     {
         try {
             switch (fmt) {
                 case ImageFormat::PNG:  return savePng(path, img);
-                case ImageFormat::BMP:
-                    img.save_bmp(path.c_str());
-                    return true;
-                case ImageFormat::PNM:
-                    img.save_pnm(path.c_str());
-                    return true;
-                default:
-                    return savePng(path, img);  // unknown → PNG
+                case ImageFormat::BMP:  img.save_bmp(path.c_str()); return true;
+                case ImageFormat::PNM:  img.save_pnm(path.c_str()); return true;
+                default:                return savePng(path, img);
             }
         } catch (...) {
             std::cerr << "  [Stego] Cannot save: " << path << "\n";
             return false;
         }
+    }
+
+    // ── Hex dump helper for diagnostics ───────────────────────────────────────
+    static std::string hexDump(const std::string& s)
+    {
+        std::ostringstream o;
+        o << std::hex << std::setfill('0');
+        for (size_t i = 0; i < std::min(s.size(), size_t(32)); ++i)
+            o << std::setw(2) << (unsigned char)s[i];
+        if (s.size() > 32) o << "...";
+        return o.str();
     }
 };
 

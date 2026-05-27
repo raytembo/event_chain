@@ -24,6 +24,14 @@ typedef void* EC_Handle;
 EC_API EC_Handle eventchain_create(const char* storageFolder, int difficulty);
 EC_API void eventchain_destroy(EC_Handle handle);
 
+EC_API const char* eventchain_last_error(void);
+
+EC_API char* eventchain_raw_extract(EC_Handle handle, const char* stegoPath);
+
+// FIX: removed duplicate declaration of eventchain_last_error that was here
+
+EC_API char* eventchain_self_test(EC_Handle handle, const char* workDir);
+
 // =============================================================================
 //  String memory management
 // =============================================================================
@@ -84,7 +92,6 @@ EC_API int eventchain_stego_capacity(int imageWidth, int imageHeight);
 // =============================================================================
 
 EC_API const char* eventchain_version(void);
-EC_API const char* eventchain_last_error(void);
 
 #ifdef __cplusplus
 }

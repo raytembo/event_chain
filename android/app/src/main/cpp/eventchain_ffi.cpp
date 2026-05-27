@@ -2,45 +2,17 @@
 //  eventchain_ffi.cpp  –  Optimized C shim with same API
 //
 //  STB INCLUDE ORDER — DO NOT REORDER THESE FOUR BLOCKS.
-//
-//  CImg.h is pulled in transitively by:
-//    eventmanager.h  →  steganography.h  →  CImg.h
-//
-//  CImg tests #ifdef cimg_use_stb at the very top of its header to decide
-//  whether to delegate load() to stb_image.  That define MUST be visible
-//  before the first token of CImg.h is processed, which means it must appear
-//  before the #include "eventmanager.h" line below.
-//
-//  Likewise, STB_IMAGE_IMPLEMENTATION and STB_IMAGE_WRITE_IMPLEMENTATION must
-//  each be defined in exactly one translation unit before their respective
-//  headers are included anywhere in the whole compilation unit — including
-//  headers pulled in transitively.  Putting both here, before every other
-//  include, guarantees that invariant.
-//
-//  Why stb_image is needed:
-//    CImg's load_png() requires libpng (cimg_use_png) which is not linked in
-//    the Android NDK build.  Without cimg_use_stb, any call to
-//    DCTSteganography::embed() with a PNG cover throws a CImgIOException that
-//    is silently caught, returning false — the root cause of the
-//    "Could not generate your ticket image" failure.
 // =============================================================================
 
 // ── Block 1: stb_image_write (PNG/BMP write, no external deps) ───────────────
-// Must come first because steganography.h forward-declares stbi_write_png.
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb/stb_image_write.h"
 
 // ── Block 2: stb_image (PNG/JPEG/BMP/WebP read, no external deps) ────────────
-// Provides the read back-end that cimg_use_stb wires into CImg::load().
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
 
 // ── Block 3: CImg feature flags ───────────────────────────────────────────────
-// cimg_use_stb  — redirect CImg's load()/save() through stb for all formats
-//                 that stb supports (PNG, JPEG, BMP, TGA, HDR, PNM …).
-//                 Without this, CImg falls back to load_png() which needs
-//                 libpng; on Android NDK that throws CImgIOException.
-// cimg_display  — must be 0 on headless/mobile targets; no display server.
 #define cimg_use_stb  1
 #define cimg_display  0
 
@@ -58,16 +30,30 @@
 
 // =============================================================================
 //  Per-thread last-error store
+//  FIX: Single definition, no `static` — must match the `extern thread_local`
+//  declaration in eventmanager.h so both translation units share the same
+//  variable.  The old code had a duplicate `static thread_local` definition
+//  below that caused an ODR violation and made setError() write to a shadow
+//  variable that eventchain_last_error() never read.
 // =============================================================================
 
-static thread_local std::string g_last_error;
+thread_local std::string g_last_error;
 
 static void setError(const std::string& msg) {
     g_last_error = msg;
 }
 
+// FIX: Single definition of eventchain_last_error — the duplicate at the
+// bottom of the old file has been removed.
+const char* eventchain_last_error(void) {
+    return g_last_error.c_str();
+}
+
 // =============================================================================
 //  Internal helpers
+//  FIX: Moved makeCString up so it is defined before eventchain_raw_extract
+//  and eventchain_self_test use it.  In C++ a static function must be defined
+//  (or at least declared) before the first call site.
 // =============================================================================
 
 // Allocate a heap copy of s for Dart to receive and later free via
@@ -135,6 +121,44 @@ static double jsonGetDouble(const std::string& json, const std::string& key) {
     if (pos == std::string::npos) return 0.0;
     pos += needle.size();
     try { return std::stod(json.substr(pos)); } catch (...) { return 0.0; }
+}
+
+// =============================================================================
+//  Diagnostic / raw operations
+//  (Placed after helpers so setError and makeCString are already defined.)
+// =============================================================================
+
+char* eventchain_raw_extract(EC_Handle handle, const char* stegoPath)
+{
+    if (!handle || !stegoPath) {
+        setError("null argument");
+        return nullptr;
+    }
+    try {
+        auto* mgr = static_cast<EventManager*>(handle);
+        std::string raw = mgr->rawExtractTicket(stegoPath);
+        if (raw.empty()) return nullptr;
+        return makeCString(raw);
+    } catch (const std::exception& e) {
+        setError(e.what());
+        return nullptr;
+    }
+}
+
+char* eventchain_self_test(EC_Handle handle, const char* workDir)
+{
+    if (!handle || !workDir) {
+        setError("null argument");
+        return nullptr;
+    }
+    try {
+        auto* mgr = static_cast<EventManager*>(handle);
+        std::string report = mgr->selfTest(workDir);
+        return makeCString(report);
+    } catch (const std::exception& e) {
+        setError(e.what());
+        return nullptr;
+    }
 }
 
 // =============================================================================
@@ -312,6 +336,10 @@ char* eventchain_get_ticket_json(EC_Handle   handle,
     }
 }
 
+// =============================================================================
+//  FIX: eventchain_save now checks the bool returned by saveEvent() and
+//  propagates the failure to Dart instead of silently swallowing it.
+// =============================================================================
 int eventchain_save(EC_Handle handle, const char* eventName)
 {
     if (!handle || !eventName) {
@@ -320,8 +348,9 @@ int eventchain_save(EC_Handle handle, const char* eventName)
     }
 
     try {
-        static_cast<EventManager*>(handle)->saveEvent(eventName);
-        return 0;
+        bool ok = static_cast<EventManager*>(handle)->saveEvent(eventName);
+        if (!ok) setError("saveEvent returned false");
+        return ok ? 0 : -1;
     } catch (const std::exception& e) {
         setError(e.what());
         return -1;
@@ -449,6 +478,5 @@ const char* eventchain_version(void) {
     return "EventChain-1.0.0-optimized";
 }
 
-const char* eventchain_last_error(void) {
-    return g_last_error.c_str();
-}
+// NOTE: eventchain_last_error is defined once near the top of this file.
+// The duplicate definition that was here has been removed.

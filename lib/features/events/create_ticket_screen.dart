@@ -128,7 +128,14 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
       builder: (_) => const _IssuingDialog(),
     );
 
-    final eventDate = _formatEventDate(widget.prefillEventDate);
+    // FIX: Pass the RAW ISO-8601 date string to the FFI layer.
+    //
+    // The old code formatted the date into "25 Dec 2025" before embedding.
+    // If the C++ chain stores the raw ISO string (or vice-versa), the scanner's
+    // field-by-field comparison fails with an eventDate MISMATCH even though
+    // the image is not corrupted. By passing the raw string, we guarantee
+    // the stego payload and the on-chain record are byte-for-byte identical.
+    final String eventDateRaw = widget.prefillEventDate ?? '';
 
     final (bool success, String? stegoPath) =
         await ref.read(eventsProvider.notifier).addTicket(
@@ -137,7 +144,8 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
               posterUrl: widget.posterUrl,
               ownerName: _ownerNameCtrl.text.trim(),
               ownerID: _authOwnerID,
-              eventDate: eventDate,
+              // FIX: raw ISO string for exact chain/stego parity
+              eventDate: eventDateRaw,
               venue: widget.prefillVenue ?? 'TBD',
               ticketType: _ticketType,
               price: double.parse(_priceCtrl.text.trim()),
@@ -156,9 +164,9 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     }
   }
 
-  /// Formats a raw ISO-8601 timestamptz into a readable date for the stego
-  /// payload (e.g. "25 Dec 2025").
-  static String _formatEventDate(String? raw) {
+  /// Formats a raw ISO-8601 timestamptz into a readable date for UI display
+  /// (e.g. "25 Dec 2025").  NOT used for the stego payload anymore.
+  static String _formatEventDateForDisplay(String? raw) {
     if (raw == null || raw.isEmpty) {
       final now = DateTime.now();
       return '${now.day.toString().padLeft(2, '0')} '

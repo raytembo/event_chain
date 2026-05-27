@@ -86,17 +86,16 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     try {
       final picked = await ImagePicker().pickImage(
         source: source,
-        // FIX (Bug 1): Do NOT set maxWidth / maxHeight here.
+        // FIX: Do NOT set maxWidth, maxHeight, OR imageQuality.
         //
-        // On Android, specifying either dimension forces the platform to
-        // re-encode the image before handing it back to Dart, even when
-        // imageQuality is 100. Re-encoding alters every LSB in the file
-        // and silently destroys the steganographic payload, causing
-        // extractAndVerify() to always return false.
+        // On Android, any of these parameters force the platform to decode
+        // the original file to a Bitmap and re-encode it before returning
+        // the path to Dart. Re-encoding alters every DCT coefficient and
+        // silently destroys the steganographic payload, causing
+        // extractAndVerify() to always return false (tampered).
         //
-        // The C++ stb_image layer accepts any size natively, so no
-        // client-side resize is needed.
-        imageQuality: 100,
+        // By leaving all three null, the plugin returns the original file
+        // bytes untouched.
       );
       if (picked != null) await _verifyImage(picked.path);
     } finally {
@@ -246,10 +245,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       final rows =
           await supabase.from('events').select('id, event_name').limit(50);
 
-      // FIX (Bug 4): Guard against widget disposal between the await above
-      // and the ref.read call below. In Riverpod 2.x, accessing a WidgetRef
-      // after disposal throws StateError. Returning [] is safe — the caller
-      // will throw NoChainsError which shows a readable snackbar.
       if (!mounted) return [];
 
       final notifier = ref.read(eventsProvider.notifier);
@@ -278,18 +273,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
   // ── Supabase lookups ──────────────────────────────────────────────────
 
-  // FIX (Bug 2): Query the `v_ticket_detail` view instead of the raw
-  // `tickets` table.
-  //
-  // The `tickets` table stores `event_id` (a UUID FK to `events`), NOT
-  // `event_name`. Querying `.eq('event_name', ...)` against `tickets`
-  // causes PostgREST to throw a 400 "column does not exist" error every
-  // time, which was silently swallowed — meaning `dbData` was always null
-  // on a successful local verification and the DB record was never shown.
-  //
-  // `v_ticket_detail` is the joined view that exposes `event_name` (and
-  // venue, event_date, poster_url, etc.) alongside all `tickets` columns.
-  // This is the same view used by `TicketRecord.fromMap` / `toFFIModel`.
   Future<Map<String, dynamic>?> _supabaseLookupByBlock(
     String eventName,
     int blockIndex,
