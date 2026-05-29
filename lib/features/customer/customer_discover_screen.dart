@@ -42,15 +42,13 @@ class CustomerDiscoverScreen extends ConsumerWidget {
           Text('Discover Events', style: AppTheme.merri(fontSize: 22)),
           Text(
             'Find & purchase tickets',
-            style:
-            AppTheme.sans(fontSize: 11, color: AppTheme.subTextColor),
+            style: AppTheme.sans(fontSize: 11, color: AppTheme.subTextColor),
           ),
         ],
       ),
       actions: [
         IconButton(
-          icon: const Icon(Icons.refresh_rounded,
-              color: AppTheme.primaryColor),
+          icon: const Icon(Icons.refresh_rounded, color: AppTheme.primaryColor),
           onPressed: () => ref.invalidate(publicEventsProvider),
           tooltip: 'Refresh',
         ),
@@ -59,15 +57,15 @@ class CustomerDiscoverScreen extends ConsumerWidget {
   }
 
   Widget _buildLoading() => const SliverFillRemaining(
-    child: Center(
-      child: CircularProgressIndicator(
-          color: AppTheme.primaryColor, strokeWidth: 2),
-    ),
-  );
+        child: Center(
+          child: CircularProgressIndicator(
+              color: AppTheme.primaryColor, strokeWidth: 2),
+        ),
+      );
 
   Widget _buildError(String message) => SliverFillRemaining(
-    child: ErrorState(message: message),
-  );
+        child: ErrorState(message: message),
+      );
 
   Widget _buildEventList(List<Map<String, dynamic>> events) {
     if (events.isEmpty) {
@@ -77,7 +75,7 @@ class CustomerDiscoverScreen extends ConsumerWidget {
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       sliver: SliverList(
         delegate: SliverChildBuilderDelegate(
-              (_, i) => Padding(
+          (_, i) => Padding(
             padding: const EdgeInsets.only(bottom: 20),
             child: EventCard(event: events[i]),
           ),

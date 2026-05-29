@@ -1,4 +1,4 @@
-// lib/features/customer/widgets/event_card.dart
+// lib/features/customer/widgets/event_card_customer.dart
 
 import 'package:flutter/material.dart';
 import '../../../shared/theme/app_theme.dart';
@@ -193,6 +193,7 @@ class EventCard extends StatelessWidget {
                   eventName: _name,
                   eventDate: _date,
                   venue: _venue,
+                  posterUrl: _posterUrl, // ← now passed to the service
                   ticketTypes: _ticketTypes,
                 ),
         ],

@@ -1,35 +1,24 @@
 // lib/features/customer/widgets/purchase_flow_sheet.dart
 //
 // 4-step purchase sheet:
-//   Step 0 — Details form
-//   Step 1 — Payment form
+//   Step 0 — Details form (Auto-filled from user profile)
+//   Step 1 — Payment form (Cardholder name auto-filled)
 //   Step 2 — Processing spinner
 //   Step 3 — Success
 //
-// CONCURRENCY FIX:
-//   Ticket decrement is handled by the Postgres function
-//   `decrement_ticket_quantity` (see decrement_ticket_quantity.sql).
-//   The function does:
-//     UPDATE event_ticket_types
-//     SET quantity_available = quantity_available - 1
-//     WHERE id = type_id AND quantity_available > 0;
-//   …and raises an exception if no row was updated (sold out).
-//   Because it runs inside a single SQL statement it is fully atomic —
-//   no client-side read-modify-write, no race conditions.
-
-import 'dart:io';
-import 'dart:math';
+// All ticket/payment DB writes, blockchain mining, and stego embedding are
+// delegated to CustomerTicketService. This widget only owns the UI flow and
+// card input collection.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../../shared/theme/app_theme.dart';
 import '../../../shared/utilities/currency_formatter.dart';
 import '../../../shared/utilities/input_formatters.dart';
+import '../services/customer_ticket_service.dart';
 import 'shared_widgets.dart';
 
 class PurchaseFlowSheet extends StatefulWidget {
@@ -41,6 +30,7 @@ class PurchaseFlowSheet extends StatefulWidget {
   final String ticketTypeId;
   final double price;
   final int quantityAvailable;
+  final String posterUrl; // ← needed by CustomerTicketService for stego embed
 
   const PurchaseFlowSheet({
     super.key,
@@ -52,6 +42,7 @@ class PurchaseFlowSheet extends StatefulWidget {
     required this.ticketTypeId,
     required this.price,
     required this.quantityAvailable,
+    this.posterUrl = '', // optional: service falls back to synthetic cover
   });
 
   @override
@@ -62,21 +53,21 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
   // ── State ──────────────────────────────────────────────────────────────────
 
   int _step = 0;
-  bool _isProcessing = false; // prevents concurrent taps on Pay button
+  bool _isProcessing = false;
 
   // Step 0 — details
   final _detailsFormKey = GlobalKey<FormState>();
-  final _nameCtrl  = TextEditingController();
+  final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
-  final _idCtrl    = TextEditingController();
+  final _idCtrl = TextEditingController();
   bool _detailsTried = false;
 
   // Step 1 — payment
   final _cardNumCtrl = TextEditingController();
-  final _expiryCtrl  = TextEditingController();
-  final _cvvCtrl     = TextEditingController();
-  final _holderCtrl  = TextEditingController();
+  final _expiryCtrl = TextEditingController();
+  final _cvvCtrl = TextEditingController();
+  final _holderCtrl = TextEditingController();
 
   // Step 3 — result
   String? _stegoPath;
@@ -92,6 +83,12 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   @override
+  void initState() {
+    super.initState();
+    _autoFillProfile();
+  }
+
+  @override
   void dispose() {
     _nameCtrl.dispose();
     _emailCtrl.dispose();
@@ -104,6 +101,41 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     super.dispose();
   }
 
+  // ── Auto-Fill ──────────────────────────────────────────────────────────────
+
+  Future<void> _autoFillProfile() async {
+    try {
+      final supabase = Supabase.instance.client;
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+
+      if (user.email != null && user.email!.isNotEmpty) {
+        _emailCtrl.text = user.email!;
+      }
+
+      final profile = await supabase
+          .from('profiles')
+          .select('display_name, phone')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      if (profile != null && mounted) {
+        setState(() {
+          if (profile['display_name'] != null) {
+            _nameCtrl.text = profile['display_name'] as String;
+            _holderCtrl.text = profile['display_name'] as String;
+          }
+          if (profile['phone'] != null) {
+            _phoneCtrl.text = profile['phone'] as String;
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint(
+          'Silent warning: Failed to auto-fill purchase profile data: $e');
+    }
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   void _goToStep(int s) => setState(() => _step = s);
@@ -113,12 +145,13 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg, style: AppTheme.sans()),
       backgroundColor:
-      isError ? AppTheme.tamperedColor : AppTheme.authenticColor,
+          isError ? AppTheme.tamperedColor : AppTheme.authenticColor,
       behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 3),
     ));
   }
 
-  // ── Step 0: validate + live availability check ────────────────────────────
+  // ── Step 0: validate + live availability check ─────────────────────────────
 
   Future<void> _submitDetails() async {
     setState(() => _detailsTried = true);
@@ -138,7 +171,7 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     _goToStep(1);
   }
 
-  // ── Step 1: validate card fields ──────────────────────────────────────────
+  // ── Step 1: validate card fields ───────────────────────────────────────────
 
   bool _validateCard() {
     final clean = _cardNumCtrl.text.replaceAll(' ', '');
@@ -152,7 +185,11 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     return true;
   }
 
-  // ── Step 1 → 2 → 3: process payment ──────────────────────────────────────
+  // ── Step 1 → 2 → 3: process payment ───────────────────────────────────────
+  //
+  // All heavy lifting (blockchain sync, block mining, stego embed, Storage
+  // uploads, DB inserts) is handled by CustomerTicketService. This method
+  // only drives the UI step transitions and surfaces errors.
 
   Future<void> _processPayment() async {
     if (_isProcessing) return;
@@ -162,164 +199,32 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     _goToStep(2);
 
     try {
-      final supabase = Supabase.instance.client;
-      final userId   = supabase.auth.currentUser?.id;
-
-      await Future.delayed(const Duration(seconds: 2)); // UX pause
-
-      final ids   = _generateIds();
-      final last4 = _last4();
-      final brand = _cardBrand(_cardNumCtrl.text.replaceAll(' ', ''));
-
-      // ── Insert ticket row ─────────────────────────────────────────────────
-      await _insertTicket(supabase, userId, ids['ticketUuid']!, ids['shortId']!);
-
-      // ── Insert payment row ────────────────────────────────────────────────
-      await _insertPayment(
-        supabase, userId,
-        ids['ticketUuid']!, ids['paymentUuid']!, ids['transRef']!,
-        last4, brand,
+      final result = await CustomerTicketService.instance.purchaseTicket(
+        eventId: widget.eventId,
+        eventName: widget.eventName,
+        posterUrl: widget.posterUrl,
+        eventDate: widget.eventDate,
+        venue: widget.venue,
+        ticketType: widget.ticketType,
+        price: widget.price,
       );
 
-      // ── Atomically decrement via Postgres RPC ─────────────────────────────
-      // This is the core fix: a single SQL UPDATE runs inside the database
-      // with no gap between the read and the write, making race conditions
-      // impossible. The function raises SOLD_OUT if quantity_available == 0.
-      await _decrementTicketQty(supabase);
+      if (!result.success) {
+        throw Exception(result.error ?? 'Purchase failed. Please try again.');
+      }
 
-      _stegoPath = await _generateStegoFile(ids['ticketUuid']!);
-
+      _stegoPath = result.stegoLocalPath;
       _goToStep(3);
     } catch (e) {
-      final msg = e.toString();
-      // Surface a friendlier message for the sold-out case.
-      final friendlyMsg = msg.contains('SOLD_OUT')
-          ? 'Sorry — this ticket just sold out while you were checking out.'
-          : 'Payment failed. Please try again.';
-
+      final msg = e.toString().replaceFirst('Exception: ', '');
       setState(() {
-        _errorMessage = friendlyMsg;
+        _errorMessage = msg;
         _step = 1;
       });
-      _showSnack(friendlyMsg);
+      _showSnack(msg);
     } finally {
       if (mounted) setState(() => _isProcessing = false);
     }
-  }
-
-  // ── DB helpers ─────────────────────────────────────────────────────────────
-
-  Map<String, String> _generateIds() {
-    final ticketUuid  = const Uuid().v4();
-    final paymentUuid = const Uuid().v4();
-    final transRef =
-        'TXN-${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(9999)}';
-    final shortId = ticketUuid.substring(0, 8).toUpperCase();
-    return {
-      'ticketUuid':  ticketUuid,
-      'paymentUuid': paymentUuid,
-      'transRef':    transRef,
-      'shortId':     shortId,
-    };
-  }
-
-  String _last4() {
-    final clean = _cardNumCtrl.text.replaceAll(' ', '');
-    return clean.substring(clean.length - 4);
-  }
-
-  String _cardBrand(String clean) {
-    if (clean.startsWith('4')) return 'visa';
-    if (clean.startsWith('5')) return 'mastercard';
-    if (clean.startsWith('3')) return 'amex';
-    if (clean.startsWith('6')) return 'discover';
-    return 'unknown';
-  }
-
-  Future<void> _insertTicket(
-      SupabaseClient supabase,
-      String? userId,
-      String ticketUuid,
-      String shortId,
-      ) async {
-    await supabase.from('tickets').insert({
-      'id':          ticketUuid,
-      'event_id':    widget.eventId,
-      'event_name':  widget.eventName,
-      'ticket_id':   shortId,
-      'ticket_type': widget.ticketType,
-      'price':       widget.price,
-      'owner_name':  _nameCtrl.text.trim(),
-      'event_date':  widget.eventDate,
-      'venue':       widget.venue,
-      'is_sold':     true,
-      'sold_to':     userId,
-      'sold_at':     DateTime.now().toIso8601String(),
-      'buyer_email': _emailCtrl.text.trim(),
-      'buyer_phone': _phoneCtrl.text.trim(),
-      'owner_id':    userId,
-      'created_at':  DateTime.now().toIso8601String(),
-    });
-  }
-
-  Future<void> _insertPayment(
-      SupabaseClient supabase,
-      String? userId,
-      String ticketUuid,
-      String paymentUuid,
-      String transRef,
-      String last4,
-      String brand,
-      ) async {
-    await supabase.from('payments').insert({
-      'id':                    paymentUuid,
-      'ticket_id':             ticketUuid,
-      'event_id':              widget.eventId,
-      'buyer_id':              userId,
-      'amount':                widget.price,
-      'currency':              'MWK',
-      'payment_method':        'credit_card',
-      'card_last_four':        last4,
-      'card_brand':            brand,
-      'status':                'completed',
-      'transaction_reference': transRef,
-      'processed_at':          DateTime.now().toIso8601String(),
-      'buyer_name':            _nameCtrl.text.trim(),
-      'buyer_email':           _emailCtrl.text.trim(),
-      'buyer_phone':           _phoneCtrl.text.trim(),
-      'created_at':            DateTime.now().toIso8601String(),
-    });
-  }
-
-  /// Calls the `decrement_ticket_quantity` Postgres function via RPC.
-  ///
-  /// The SQL function (see decrement_ticket_quantity.sql) does:
-  ///   UPDATE event_ticket_types
-  ///   SET quantity_available = quantity_available - 1
-  ///   WHERE id = type_id AND quantity_available > 0;
-  ///
-  /// Because the entire decrement happens inside a single SQL statement it is
-  /// 100% atomic — there is no window between reading the current value and
-  /// writing the new one, so two concurrent purchases can never both succeed
-  /// on the last ticket.
-  Future<void> _decrementTicketQty(SupabaseClient supabase) async {
-    await supabase.rpc(
-      'decrement_ticket_quantity',
-      params: {'type_id': widget.ticketTypeId},
-    );
-    // If quantity_available was already 0 the function raises SOLD_OUT,
-    // which Supabase surfaces as a PostgrestException — caught above.
-  }
-
-  Future<String> _generateStegoFile(String ticketUuid) async {
-    final tempDir = await getTemporaryDirectory();
-    final stegoFile = File('${tempDir.path}/ticket_$ticketUuid.bmp');
-    final header = List<int>.filled(54, 0)
-      ..[0] = 0x42
-      ..[1] = 0x4D;
-    await stegoFile
-        .writeAsBytes([...header, ...List<int>.filled(600, 0xFF)]);
-    return stegoFile.path;
   }
 
   // ── Share ──────────────────────────────────────────────────────────────────
@@ -364,15 +269,20 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
 
   Widget _buildCurrentStep() {
     switch (_step) {
-      case 0: return _buildDetailsStep();
-      case 1: return _buildPaymentStep();
-      case 2: return _buildProcessingStep();
-      case 3: return _buildSuccessStep();
-      default: return const SizedBox.shrink();
+      case 0:
+        return _buildDetailsStep();
+      case 1:
+        return _buildPaymentStep();
+      case 2:
+        return _buildProcessingStep();
+      case 3:
+        return _buildSuccessStep();
+      default:
+        return const SizedBox.shrink();
     }
   }
 
-  // ── Step 0 — Details ──────────────────────────────────────────────────────
+  // ── Step 0 — Details ───────────────────────────────────────────────────────
 
   Widget _buildDetailsStep() {
     return SingleChildScrollView(
@@ -463,7 +373,7 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     );
   }
 
-  // ── Step 1 — Payment ──────────────────────────────────────────────────────
+  // ── Step 1 — Payment ───────────────────────────────────────────────────────
 
   Widget _buildPaymentStep() {
     return SingleChildScrollView(
@@ -553,8 +463,8 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
               onPressed: _isProcessing ? null : () => _goToStep(0),
               child: Text(
                 '← Back to Details',
-                style: AppTheme.sans(
-                    fontSize: 13, color: AppTheme.subTextColor),
+                style:
+                    AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
               ),
             ),
           ),
@@ -563,28 +473,27 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     );
   }
 
-  // ── Step 2 — Processing ───────────────────────────────────────────────────
+  // ── Step 2 — Processing ────────────────────────────────────────────────────
 
   Widget _buildProcessingStep() => Center(
-    key: const ValueKey(2),
-    child: Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const CircularProgressIndicator(
-            color: AppTheme.primaryColor, strokeWidth: 2.5),
-        const SizedBox(height: 28),
-        Text('Processing payment…', style: AppTheme.merri(fontSize: 20)),
-        const SizedBox(height: 8),
-        Text(
-          'Please do not close this screen.',
-          style: AppTheme.sans(
-              fontSize: 13, color: AppTheme.subTextColor),
+        key: const ValueKey(2),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CircularProgressIndicator(
+                color: AppTheme.primaryColor, strokeWidth: 2.5),
+            const SizedBox(height: 28),
+            Text('Processing payment…', style: AppTheme.merri(fontSize: 20)),
+            const SizedBox(height: 8),
+            Text(
+              'Please do not close this screen.',
+              style: AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),
+            ),
+          ],
         ),
-      ],
-    ),
-  );
+      );
 
-  // ── Step 3 — Success ──────────────────────────────────────────────────────
+  // ── Step 3 — Success ───────────────────────────────────────────────────────
 
   Widget _buildSuccessStep() {
     return SingleChildScrollView(
@@ -597,8 +506,7 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
           const SizedBox(height: 20),
           Text(
             'Payment Successful!',
-            style:
-            AppTheme.merri(fontSize: 24, color: AppTheme.authenticColor),
+            style: AppTheme.merri(fontSize: 24, color: AppTheme.authenticColor),
           ),
           const SizedBox(height: 8),
           Text(
@@ -627,8 +535,7 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12)),
                   ),
-                  child:
-                  Text('Close', style: AppTheme.sans(fontSize: 14)),
+                  child: Text('Close', style: AppTheme.sans(fontSize: 14)),
                 ),
               ),
               const SizedBox(width: 12),

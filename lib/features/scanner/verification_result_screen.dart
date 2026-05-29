@@ -235,7 +235,7 @@ class _TicketDetailCard extends StatelessWidget {
       ('Owner', ticket.ownerName),
       ('Owner ID', ticket.ownerID),
       ('Type', ticket.ticketType),
-      ('Price', '\$${ticket.price.toStringAsFixed(2)}'),
+      ('Price', 'MWK${ticket.price.toStringAsFixed(2)}'),
     ];
 
     return Container(

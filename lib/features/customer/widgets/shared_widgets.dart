@@ -1,15 +1,9 @@
 // lib/features/customer/widgets/shared_widgets.dart
-//
-// Small, reusable widgets used across the discover screen and purchase sheet.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../../shared/theme/app_theme.dart';
 import '../../../shared/utilities/currency_formatter.dart';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PRIMARY BUTTON
-// ─────────────────────────────────────────────────────────────────────────────
 
 class PrimaryButton extends StatelessWidget {
   final String label;
@@ -34,10 +28,6 @@ class PrimaryButton extends StatelessWidget {
         ),
       );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SUMMARY ROW — label / value pair used in order and ticket detail cards
-// ─────────────────────────────────────────────────────────────────────────────
 
 class SummaryRow extends StatelessWidget {
   final String label;
@@ -65,10 +55,6 @@ class SummaryRow extends StatelessWidget {
         ),
       );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TICKET SUMMARY BADGE — shown at top of details step
-// ─────────────────────────────────────────────────────────────────────────────
 
 class TicketSummaryBadge extends StatelessWidget {
   final String type;
@@ -115,10 +101,6 @@ class TicketSummaryBadge extends StatelessWidget {
         ),
       );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ORDER SUMMARY — shown at top of payment step
-// ─────────────────────────────────────────────────────────────────────────────
 
 class OrderSummary extends StatelessWidget {
   final String name;
@@ -169,10 +151,6 @@ class OrderSummary extends StatelessWidget {
       );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TICKET DETAIL CARD — shown on success step
-// ─────────────────────────────────────────────────────────────────────────────
-
 class TicketDetailCard extends StatelessWidget {
   final String eventName;
   final String ticketType;
@@ -216,10 +194,6 @@ class TicketDetailCard extends StatelessWidget {
       );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ERROR BANNER — shown inline when payment fails
-// ─────────────────────────────────────────────────────────────────────────────
-
 class ErrorBanner extends StatelessWidget {
   final String message;
   const ErrorBanner({super.key, required this.message});
@@ -240,10 +214,6 @@ class ErrorBanner extends StatelessWidget {
       );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SUCCESS ICON
-// ─────────────────────────────────────────────────────────────────────────────
-
 class SuccessIcon extends StatelessWidget {
   const SuccessIcon({super.key});
 
@@ -258,10 +228,6 @@ class SuccessIcon extends StatelessWidget {
             size: 48, color: AppTheme.authenticColor),
       );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SHEET HEADER — drag handle + step badge + title + cancel
-// ─────────────────────────────────────────────────────────────────────────────
 
 class SheetHeader extends StatelessWidget {
   final String stepLabel;
@@ -342,10 +308,6 @@ class _StepBadge extends StatelessWidget {
       );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FORM FIELD — labelled TextFormField
-// ─────────────────────────────────────────────────────────────────────────────
-
 class AppFormField extends StatelessWidget {
   final TextEditingController controller;
   final String label;
@@ -392,10 +354,6 @@ class AppFormField extends StatelessWidget {
         ],
       );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CARD INPUT — plain TextField with label (no form validation)
-// ─────────────────────────────────────────────────────────────────────────────
 
 class CardInput extends StatelessWidget {
   final TextEditingController controller;
@@ -448,10 +406,6 @@ class CardInput extends StatelessWidget {
         ],
       );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CARD PREVIEW — live credit-card visualisation
-// ─────────────────────────────────────────────────────────────────────────────
 
 class CardPreview extends StatelessWidget {
   final String number;
@@ -518,10 +472,6 @@ class CardPreview extends StatelessWidget {
       );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// EMPTY STATE
-// ─────────────────────────────────────────────────────────────────────────────
-
 class EmptyState extends StatelessWidget {
   const EmptyState({super.key});
 
@@ -547,10 +497,6 @@ class EmptyState extends StatelessWidget {
         ),
       );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ERROR STATE
-// ─────────────────────────────────────────────────────────────────────────────
 
 class ErrorState extends StatelessWidget {
   final String message;

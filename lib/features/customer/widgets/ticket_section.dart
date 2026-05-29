@@ -15,6 +15,7 @@ class TicketSection extends StatefulWidget {
   final String eventName;
   final String eventDate;
   final String venue;
+  final String posterUrl; // ← needed so the service can embed the real poster
   final List<Map<String, dynamic>> ticketTypes;
 
   const TicketSection({
@@ -23,6 +24,7 @@ class TicketSection extends StatefulWidget {
     required this.eventName,
     required this.eventDate,
     required this.venue,
+    required this.posterUrl,
     required this.ticketTypes,
   });
 
@@ -83,6 +85,7 @@ class _TicketSectionState extends State<TicketSection> {
         ticketTypeId: _selectedId,
         price: _selectedPrice,
         quantityAvailable: _selectedQty,
+        posterUrl: widget.posterUrl, // ← passed through to the service
       ),
     );
   }
