@@ -3,11 +3,13 @@
 // Shows purchased tickets with:
 //   • Stego ticket image (loaded from stego_url in the tickets table)
 //   • Download to gallery (via gal library)
-//   • Share via system share sheet
+//   • Share via system share sheet (Image & ZIP formats)
 //   • Event details joined from events table
 
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
@@ -102,6 +104,7 @@ class _WalletCard extends StatefulWidget {
 
 class _WalletCardState extends State<_WalletCard> {
   bool _isDownloading = false;
+  bool _isZipping = false;
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -258,6 +261,95 @@ class _WalletCardState extends State<_WalletCard> {
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 3),
       ));
+    }
+  }
+
+  // ── Share ticket ZIP archive ───────────────────────────────────────────────
+
+  Future<void> _shareTicketZip({
+    required String stegoUrl,
+    required String ticketId,
+    required String eventName,
+    required String eventDate,
+    required String venue,
+    required String ownerName,
+    required String ticketType,
+    required double price,
+    required int blockIndex,
+  }) async {
+    if (_isZipping) return;
+    setState(() => _isZipping = true);
+
+    try {
+      final response = await http.get(Uri.parse(stegoUrl));
+      if (response.statusCode != 200)
+        throw Exception('Could not fetch image asset');
+
+      final imageBytes = response.bodyBytes;
+      final archive = Archive();
+
+      // 1. Add stego ticket image to archive
+      archive.addFile(
+        ArchiveFile(
+          'ticket_$ticketId.png',
+          imageBytes.length,
+          imageBytes,
+        ),
+      );
+
+      // 2. Generate and add metadata text file manifest
+      final manifestText = '''
+==================================================
+              EVENTCHAIN TICKET MANIFEST          
+==================================================
+Ticket ID:  #$ticketId
+Event:      $eventName
+Date:       $eventDate
+Venue:      $venue
+Owner:      $ownerName
+Tier:       ${ticketType.toUpperCase()}
+Price:      MK ${formatMwk(price)}
+Block:      BLOCK #$blockIndex
+
+Generated securely via EventChain System.
+==================================================
+''';
+      final manifestBytes = utf8.encode(manifestText);
+      archive.addFile(
+        ArchiveFile(
+          'ticket_details.txt',
+          manifestBytes.length,
+          manifestBytes,
+        ),
+      );
+
+      // 3. Compress into ZIP archive layout
+      final zipEncoder = ZipEncoder();
+      final zipBytes = zipEncoder.encode(archive);
+      if (zipBytes == null)
+        throw Exception('Failed to generate archive structure');
+
+      final tempDir = await getTemporaryDirectory();
+      final zipFile = File('${tempDir.path}/ticket_$ticketId.zip');
+      await zipFile.writeAsBytes(zipBytes);
+
+      // 4. Fire share sheet targeting the generated binary format
+      await Share.shareXFiles(
+        [XFile(zipFile.path, mimeType: 'application/zip')],
+        subject: 'EventChain Archive - $eventName',
+        text:
+            'Compressed asset packet containing secure ticket verification items.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('ZIP bundle build failed: $e', style: AppTheme.sans()),
+        backgroundColor: AppTheme.tamperedColor,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+      ));
+    } finally {
+      if (mounted) setState(() => _isZipping = false);
     }
   }
 
@@ -436,36 +528,68 @@ class _WalletCardState extends State<_WalletCard> {
 
                 const SizedBox(height: 12),
 
-                // Download + Share buttons
+                // Download + Share Actions Matrix
                 if (stegoUrl != null)
-                  Row(
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Expanded(
-                        child: _ActionButton(
-                          icon: _isDownloading ? null : Icons.download_rounded,
-                          label: _isDownloading ? 'Saving…' : 'Download',
-                          color: typeColor,
-                          loading: _isDownloading,
-                          onTap: _isDownloading
-                              ? null
-                              : () => _downloadTicket(
-                                    stegoUrl: stegoUrl,
-                                    ticketId: ticketId,
-                                  ),
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _ActionButton(
+                              icon: _isDownloading
+                                  ? null
+                                  : Icons.download_rounded,
+                              label: _isDownloading ? 'Saving…' : 'Download',
+                              color: typeColor,
+                              loading: _isDownloading,
+                              onTap: _isDownloading
+                                  ? null
+                                  : () => _downloadTicket(
+                                        stegoUrl: stegoUrl,
+                                        ticketId: ticketId,
+                                      ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _ActionButton(
+                              icon: Icons.share_rounded,
+                              label: 'Share Image',
+                              color: typeColor,
+                              outlined: true,
+                              onTap: () => _shareTicket(
+                                stegoUrl: stegoUrl,
+                                ticketId: ticketId,
+                                eventName: eventName,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
                         child: _ActionButton(
-                          icon: Icons.share_rounded,
-                          label: 'Share',
+                          icon: _isZipping ? null : Icons.folder_zip_outlined,
+                          label:
+                              _isZipping ? 'Archiving…' : 'Share ZIP Archive',
                           color: typeColor,
                           outlined: true,
-                          onTap: () => _shareTicket(
-                            stegoUrl: stegoUrl,
-                            ticketId: ticketId,
-                            eventName: eventName,
-                          ),
+                          loading: _isZipping,
+                          onTap: _isZipping
+                              ? null
+                              : () => _shareTicketZip(
+                                    stegoUrl: stegoUrl,
+                                    ticketId: ticketId,
+                                    eventName: eventName,
+                                    eventDate: eventDate,
+                                    venue: venue,
+                                    ownerName: ownerName,
+                                    ticketType: ticketType,
+                                    price: price,
+                                    blockIndex: blockIndex,
+                                  ),
                         ),
                       ),
                     ],
@@ -583,7 +707,7 @@ class _ActionButton extends StatelessWidget {
           )
         else if (icon != null)
           Icon(icon, size: 16, color: outlined ? color : Colors.black),
-        const SizedBox(width: 7),
+        if (icon != null || loading) const SizedBox(width: 7),
         Text(
           label,
           style: AppTheme.sans(

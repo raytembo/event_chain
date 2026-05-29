@@ -10,12 +10,12 @@ android {
     ndkVersion = "27.0.12077973"
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
     }
 
     kotlinOptions {
-        jvmTarget = "1.8"
+        jvmTarget = "21"
     }
 
     defaultConfig {
@@ -33,7 +33,7 @@ android {
         }
 
         ndk {
-            abiFilters 'arm64-v8a', 'x86_64'   // ← Groovy syntax, no listOf()
+            abiFilters 'arm64-v8a', 'x86_64'
         }
     }
 
@@ -63,4 +63,22 @@ android {
 
 flutter {
     source "../.."
+}
+
+subprojects {
+    afterEvaluate { project ->
+        if (project.hasProperty('android')) {
+            project.android {
+                compileOptions {
+                    sourceCompatibility JavaVersion.VERSION_21
+                    targetCompatibility JavaVersion.VERSION_21
+                }
+                if (project.hasProperty('kotlinOptions')) {
+                    kotlinOptions {
+                        jvmTarget = '21'
+                    }
+                }
+            }
+        }
+    }
 }

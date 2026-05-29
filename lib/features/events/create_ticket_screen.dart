@@ -1,6 +1,7 @@
 // lib/features/events/create_ticket_screen.dart
 
 import 'dart:io';
+import 'package:archive/archive_io.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -45,7 +46,19 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
   /// Never editable by the user.
   late final String _authOwnerID;
 
+  // ── Profile lookup state fields ──────────────────────────────────────────
+  String? _resolvedOwnerId;
+  bool _checkingProfile = false;
+  String? _profileStatusMessage;
+  bool _hasCheckedProfile = false;
+
   final TextEditingController _priceCtrl = TextEditingController();
+
+  // ── Card payment controllers ───────────────────────────────────────────────
+  final TextEditingController _cardNumCtrl = TextEditingController();
+  final TextEditingController _expiryCtrl = TextEditingController();
+  final TextEditingController _cvvCtrl = TextEditingController();
+  final TextEditingController _cardHolderCtrl = TextEditingController();
 
   String _ticketType = 'General';
   bool _submitting = false;
@@ -65,7 +78,10 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     _ownerNameCtrl = TextEditingController(
       text: user?.userMetadata?['full_name'] as String? ?? '',
     );
+    // Auto-fill cardholder name from the same source.
+    _cardHolderCtrl.text = user?.userMetadata?['full_name'] as String? ?? '';
     _authOwnerID = user?.id ?? '';
+    _resolvedOwnerId = _authOwnerID; // Default baseline fallback assignment
     _loadPricesAndCapacity();
   }
 
@@ -73,6 +89,10 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
   void dispose() {
     _ownerNameCtrl.dispose();
     _priceCtrl.dispose();
+    _cardNumCtrl.dispose();
+    _expiryCtrl.dispose();
+    _cvvCtrl.dispose();
+    _cardHolderCtrl.dispose();
     super.dispose();
   }
 
@@ -110,10 +130,78 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     }
   }
 
+  // ── Remote Profile Search Check ────────────────────────────────────────────
+
+  Future<void> _lookupProfileAccount(String name) async {
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) return;
+
+    setState(() {
+      _checkingProfile = true;
+      _profileStatusMessage = null;
+      _hasCheckedProfile = true;
+    });
+
+    try {
+      // Look up cross-referencing provided name against user profiles table dataset
+      final profile = await SupabaseService.instance.client
+          .from('profiles')
+          .select('id, display_name, email')
+          .eq('display_name', trimmedName)
+          .maybeSingle();
+
+      if (!mounted) return;
+
+      setState(() {
+        if (profile != null) {
+          _resolvedOwnerId = profile['id'] as String;
+          _profileStatusMessage =
+              'Linked with platform user account (${profile['email']})';
+        } else {
+          // Fall back seamlessly to normal operational parameters
+          _resolvedOwnerId = _authOwnerID;
+          _profileStatusMessage =
+              'No matching user account found. Issuing as guest ticket.';
+        }
+      });
+    } catch (e) {
+      debugPrint('❌ _lookupProfileAccount error: $e');
+      setState(() {
+        _resolvedOwnerId = _authOwnerID;
+        _profileStatusMessage =
+            'Profile validation offline. Issuing as guest ticket.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _checkingProfile = false);
+      }
+    }
+  }
+
+  // ── Card validation ────────────────────────────────────────────────────────
+
+  /// Returns null on success, or an error message string on failure.
+  String? _validateCard() {
+    final clean = _cardNumCtrl.text.replaceAll(' ', '');
+    if (clean.length < 13) return 'Enter a valid card number.';
+    if (_expiryCtrl.text.length < 5) return 'Enter a valid expiry date.';
+    if (_cvvCtrl.text.length < 3) return 'Enter a valid CVV.';
+    if (_cardHolderCtrl.text.trim().isEmpty) {
+      return 'Enter the cardholder name.';
+    }
+    return null;
+  }
+
   // ── Submission ─────────────────────────────────────────────────────────────
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+
+    final cardError = _validateCard();
+    if (cardError != null) {
+      _showSnack(cardError, isError: true);
+      return;
+    }
 
     final slotsLeft = _remaining[_ticketType] ?? 0;
     if (slotsLeft <= 0) {
@@ -130,13 +218,6 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
       builder: (_) => const _IssuingDialog(),
     );
 
-    // FIX: Pass the RAW ISO-8601 date string to the FFI layer.
-    //
-    // The old code formatted the date into "25 Dec 2025" before embedding.
-    // If the C++ chain stores the raw ISO string (or vice-versa), the scanner's
-    // field-by-field comparison fails with an eventDate MISMATCH even though
-    // the image is not corrupted. By passing the raw string, we guarantee
-    // the stego payload and the on-chain record are byte-for-byte identical.
     final String eventDateRaw = widget.prefillEventDate ?? '';
 
     final (bool success, String? stegoPath) =
@@ -145,9 +226,9 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
               eventId: widget.eventId,
               posterUrl: widget.posterUrl,
               ownerName: _ownerNameCtrl.text.trim(),
-              ownerID: _authOwnerID,
-              // FIX: raw ISO string for exact chain/stego parity
-              eventDate: eventDateRaw,
+              // Links to verified platform profile UID if found, else normal fallback
+              ownerID: _resolvedOwnerId ?? _authOwnerID,
+              eventDate: _formatEventDateForDisplay(eventDateRaw),
               venue: widget.prefillVenue ?? 'TBD',
               ticketType: _ticketType,
               price: double.parse(_priceCtrl.text.trim()),
@@ -216,9 +297,6 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
           'What would you like to do with the ticket image?',
         ),
         actions: [
-          // Make sure you have this import at the top of the file:
-// import 'dart:io';
-
           TextButton.icon(
             icon: const Icon(Icons.save_alt, color: AppTheme.primaryColor),
             label: Text('Save to Gallery',
@@ -230,8 +308,6 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
                 final lowerPath = stegoPath.toLowerCase();
                 String pathToSave = stegoPath;
 
-                // 1. FIX FOR SAMSUNG: Ensure the file has a valid image extension.
-                // Samsung Gallery ignores files without .png/.jpg/.jpeg extensions.
                 if (!lowerPath.endsWith('.png') &&
                     !lowerPath.endsWith('.jpg') &&
                     !lowerPath.endsWith('.jpeg')) {
@@ -241,8 +317,6 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
                   pathToSave = newFile.path;
                 }
 
-                // 2. Use the 'album' parameter to create a dedicated folder
-                // named "EventChain" in the Samsung Gallery app.
                 await Gal.putImage(pathToSave, album: 'EventChain');
 
                 if (mounted) {
@@ -263,10 +337,31 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
                 style: AppTheme.sans(color: AppTheme.primaryColor)),
             onPressed: () async {
               Navigator.pop(ctx);
-              await Share.shareXFiles(
-                [XFile(stegoPath)],
-                subject: 'My EventChain Ticket – ${widget.prefillEventName}',
-              );
+              try {
+                final imageFile = File(stegoPath);
+                final imageBytes = await imageFile.readAsBytes();
+
+                final imageFileName =
+                    'ticket_${widget.prefillEventName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_')}.png';
+
+                final archive = Archive();
+                archive.addFile(
+                  ArchiveFile(imageFileName, imageBytes.length, imageBytes),
+                );
+
+                final zipBytes = ZipEncoder().encode(archive);
+                final tempDir = Directory.systemTemp;
+                final zipPath =
+                    '${tempDir.path}/ticket_${DateTime.now().millisecondsSinceEpoch}.zip';
+                await File(zipPath).writeAsBytes(zipBytes);
+
+                await Share.shareXFiles(
+                  [XFile(zipPath, mimeType: 'application/zip')],
+                  subject: 'My EventChain Ticket – ${widget.prefillEventName}',
+                );
+              } catch (e) {
+                if (mounted) _showSnack('Could not share: $e', isError: true);
+              }
             },
           ),
           TextButton(
@@ -362,17 +457,86 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
             const SizedBox(height: 24),
 
             // ── Attendee name ──────────────────────────────────────────────
-            const _SectionLabel('Attendee Name'),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const _SectionLabel('Attendee Name'),
+                if (_checkingProfile)
+                  const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 1.5, color: AppTheme.primaryColor),
+                  )
+                else
+                  GestureDetector(
+                    onTap: () => _lookupProfileAccount(_ownerNameCtrl.text),
+                    child: Text(
+                      'VERIFY ACCOUNT',
+                      style: AppTheme.sans(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.primaryColor,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
             const SizedBox(height: 8),
             TextFormField(
               controller: _ownerNameCtrl,
               style: AppTheme.sans(fontSize: 14),
-              decoration: _inputDecoration('Full name', Icons.person_outline),
+              decoration:
+                  _inputDecoration('Full name', Icons.person_outline).copyWith(
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.search,
+                      size: 18, color: AppTheme.subTextColor),
+                  onPressed: () => _lookupProfileAccount(_ownerNameCtrl.text),
+                ),
+              ),
               textCapitalization: TextCapitalization.words,
+              onChanged: (v) {
+                // Clear state triggers to enforce checking status validity if input changes
+                if (_hasCheckedProfile) {
+                  setState(() {
+                    _hasCheckedProfile = false;
+                    _profileStatusMessage = null;
+                    _resolvedOwnerId = _authOwnerID;
+                  });
+                }
+                if (_cardHolderCtrl.text.isEmpty ||
+                    _cardHolderCtrl.text ==
+                        (SupabaseService.instance.auth.currentUser
+                                ?.userMetadata?['full_name'] as String? ??
+                            '')) {
+                  setState(() => _cardHolderCtrl.text = v);
+                }
+              },
               validator: (v) => (v == null || v.trim().isEmpty)
                   ? 'Please enter the attendee name'
                   : null,
             ),
+            if (_profileStatusMessage != null) ...[
+              const SizedBox(height: 6),
+              Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: Text(
+                  _profileStatusMessage!,
+                  style: AppTheme.sans(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: _resolvedOwnerId != _authOwnerID
+                        ? AppTheme.primaryColor
+                        : AppTheme.subTextColor,
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 32),
+
+            // ── Payment ────────────────────────────────────────────────────
+            _buildPaymentSection(),
             const SizedBox(height: 32),
 
             // ── Submit ─────────────────────────────────────────────────────
@@ -428,6 +592,85 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     );
   }
 
+  // ── Payment section ────────────────────────────────────────────────────────
+
+  Widget _buildPaymentSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Row(
+          children: [
+            _SectionLabel('Payment'),
+            SizedBox(width: 6),
+            Icon(Icons.lock_outline, size: 12, color: AppTheme.subTextColor),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _CardPreview(
+          number: _cardNumCtrl.text,
+          holder: _cardHolderCtrl.text,
+          expiry: _expiryCtrl.text,
+        ),
+        const SizedBox(height: 16),
+        _CardField(
+          label: 'Card Number',
+          controller: _cardNumCtrl,
+          icon: Icons.credit_card_rounded,
+          type: TextInputType.number,
+          formatters: [
+            FilteringTextInputFormatter.digitsOnly,
+            _CardNumberFormatter(),
+          ],
+          maxLength: 19,
+          hint: '1234 5678 9012 3456',
+          onChanged: (_) => setState(() {}),
+        ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            Expanded(
+              child: _CardField(
+                label: 'Expiry',
+                controller: _expiryCtrl,
+                icon: Icons.calendar_today_outlined,
+                type: TextInputType.number,
+                formatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  _ExpiryFormatter(),
+                ],
+                maxLength: 5,
+                hint: 'MM/YY',
+                onChanged: (_) => setState(() {}),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: _CardField(
+                label: 'CVV',
+                controller: _cvvCtrl,
+                icon: Icons.lock_outline_rounded,
+                type: TextInputType.number,
+                formatters: [FilteringTextInputFormatter.digitsOnly],
+                maxLength: 4,
+                hint: '•••',
+                obscure: true,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _CardField(
+          label: 'Cardholder Name',
+          controller: _cardHolderCtrl,
+          icon: Icons.person_outline_rounded,
+          type: TextInputType.name,
+          hint: 'Name as on card',
+          onChanged: (_) => setState(() {}),
+        ),
+      ],
+    );
+  }
+
   InputDecoration _inputDecoration(String hint, IconData icon) =>
       InputDecoration(
         hintText: hint,
@@ -436,9 +679,321 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
       );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Reusable widgets
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Card Preview & Formatters (Unchanged) ────────────────────────────────────
+class _CardPreview extends StatelessWidget {
+  final String number;
+  final String holder;
+  final String expiry;
+
+  const _CardPreview({
+    required this.number,
+    required this.holder,
+    required this.expiry,
+  });
+
+  LinearGradient _cardGradient() {
+    final first =
+        number.replaceAll(' ', '').isEmpty ? '' : number.replaceAll(' ', '')[0];
+    return switch (first) {
+      '4' => const LinearGradient(
+          colors: [Color(0xFF1A237E), Color(0xFF283593)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      '5' => const LinearGradient(
+          colors: [Color(0xFF880E4F), Color(0xFFAD1457)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      '3' => const LinearGradient(
+          colors: [Color(0xFF004D40), Color(0xFF00695C)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      _ => const LinearGradient(
+          colors: [Color(0xFF1E1E1E), Color(0xFF2C2C2C)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+    };
+  }
+
+  String _maskedNumber() {
+    final digits = number.replaceAll(' ', '');
+    if (digits.isEmpty) return '•••• •••• •••• ••••';
+    final padded = digits.padRight(16, '•');
+    final g1 = padded.substring(0, 4);
+    final g2 = padded.substring(4, 8);
+    final g3 = padded.substring(8, 12);
+    final g4 = padded.substring(12, 16);
+    return '$g1 '
+        '${digits.length > 4 ? '••••' : g2} '
+        '${digits.length > 8 ? '••••' : g3} '
+        '$g4';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      height: 160,
+      decoration: BoxDecoration(
+        gradient: _cardGradient(),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            top: -30,
+            right: -30,
+            child: Container(
+              width: 140,
+              height: 140,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.06), width: 40),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -20,
+            left: -20,
+            child: Container(
+              width: 100,
+              height: 100,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.04), width: 30),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 26,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFD4AF37),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                            color: const Color(0xFFB8960C), width: 0.5),
+                      ),
+                      child: Center(
+                        child: Container(
+                          width: 22,
+                          height: 16,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFB8960C),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      _networkLabel(),
+                      style: AppTheme.sans(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white.withValues(alpha: 0.9),
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                  ],
+                ),
+                const Spacer(),
+                Text(
+                  _maskedNumber(),
+                  style: AppTheme.sans(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                    letterSpacing: 2.0,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'CARD HOLDER',
+                          style: AppTheme.sans(
+                            fontSize: 8,
+                            color: Colors.white.withValues(alpha: 0.5),
+                            letterSpacing: 1.2,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          holder.trim().isEmpty
+                              ? 'FULL NAME'
+                              : holder.trim().toUpperCase(),
+                          style: AppTheme.sans(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white.withValues(alpha: 0.9),
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                    const Spacer(),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          'EXPIRES',
+                          style: AppTheme.sans(
+                            fontSize: 8,
+                            color: Colors.white.withValues(alpha: 0.5),
+                            letterSpacing: 1.2,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          expiry.isEmpty ? 'MM/YY' : expiry,
+                          style: AppTheme.sans(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white.withValues(alpha: 0.9),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _networkLabel() {
+    final first =
+        number.replaceAll(' ', '').isEmpty ? '' : number.replaceAll(' ', '')[0];
+    return switch (first) {
+      '4' => 'VISA',
+      '5' => 'MASTERCARD',
+      '3' => 'AMEX',
+      _ => '',
+    };
+  }
+}
+
+class _CardField extends StatelessWidget {
+  final String label;
+  final TextEditingController controller;
+  final IconData icon;
+  final TextInputType type;
+  final List<TextInputFormatter> formatters;
+  final int? maxLength;
+  final String hint;
+  final bool obscure;
+  final ValueChanged<String>? onChanged;
+
+  const _CardField({
+    required this.label,
+    required this.controller,
+    required this.icon,
+    required this.type,
+    this.formatters = const [],
+    this.maxLength,
+    required this.hint,
+    this.obscure = false,
+    this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label.toUpperCase(),
+          style: AppTheme.sans(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 1.2,
+            color: AppTheme.subTextColor,
+          ),
+        ),
+        const SizedBox(height: 6),
+        TextField(
+          controller: controller,
+          keyboardType: type,
+          inputFormatters: formatters,
+          maxLength: maxLength,
+          obscureText: obscure,
+          style: AppTheme.sans(fontSize: 14),
+          onChanged: onChanged,
+          decoration: InputDecoration(
+            hintText: hint,
+            counterText: '',
+            prefixIcon: Icon(icon, color: AppTheme.subTextColor, size: 20),
+            hintStyle:
+                AppTheme.sans(fontSize: 13, color: const Color(0xFF555555)),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CardNumberFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final digits = newValue.text.replaceAll(' ', '');
+    final buffer = StringBuffer();
+    for (int i = 0; i < digits.length; i++) {
+      if (i > 0 && i % 4 == 0) buffer.write(' ');
+      buffer.write(digits[i]);
+    }
+    final formatted = buffer.toString();
+    return newValue.copyWith(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+}
+
+class _ExpiryFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final digits = newValue.text.replaceAll('/', '');
+    if (digits.length >= 3) {
+      final formatted = '${digits.substring(0, 2)}/${digits.substring(2)}';
+      return newValue.copyWith(
+        text: formatted,
+        selection: TextSelection.collapsed(offset: formatted.length),
+      );
+    }
+    return newValue;
+  }
+}
 
 class _SectionLabel extends StatelessWidget {
   final String text;
@@ -490,9 +1045,6 @@ class _ReadOnlyField extends StatelessWidget {
       );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// _TypeSelector
-// ─────────────────────────────────────────────────────────────────────────────
 class _TypeSelector extends StatelessWidget {
   final String selected;
   final List<String> types;
@@ -596,9 +1148,6 @@ class _TypeSelector extends StatelessWidget {
       );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// _IssuingDialog — shown while the blockchain operation runs
-// ─────────────────────────────────────────────────────────────────────────────
 class _IssuingDialog extends StatelessWidget {
   const _IssuingDialog();
 
@@ -620,7 +1169,7 @@ class _IssuingDialog extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'Securing the ticket on the blockchain.\nThis usually takes 5–30 seconds.',
+                'Securing the ticket \nThis usually takes 5–30 seconds.',
                 textAlign: TextAlign.center,
                 style:
                     AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor),

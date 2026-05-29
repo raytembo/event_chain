@@ -1,9 +1,11 @@
 // lib/features/events/event_detail_screen.dart
 //
 // Shows an owner's event: chain integrity status, all issued tickets, and the
-// button to issue more. Handles ticket sharing as PNG or BMP.
+// button to issue more. Handles ticket sharing as PNG or BMP zip.
 
 import 'dart:io';
+import 'package:archive/archive_io.dart';
+import 'package:gal/gal.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -18,6 +20,32 @@ import '../../shared/theme/app_theme.dart';
 import 'events_provider.dart';
 import 'create_ticket_screen.dart';
 
+/// Formats an ISO-8601 string into a human-readable local date format.
+String _formatDate(String? raw) {
+  if (raw == null || raw.isEmpty) return '';
+  try {
+    final dt = DateTime.parse(raw).toLocal();
+    const months = [
+      '',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
+    return '${dt.day.toString().padLeft(2, '0')} ${months[dt.month]} ${dt.year}';
+  } catch (_) {
+    return raw;
+  }
+}
+
 class EventDetailScreen extends ConsumerStatefulWidget {
   final String eventName;
   final String eventId;
@@ -25,8 +53,6 @@ class EventDetailScreen extends ConsumerStatefulWidget {
   final String? venue;
 
   /// Raw ISO-8601 timestamptz string from events.event_date.
-  /// Displayed as a formatted date; also passed to CreateTicketScreen for the
-  /// steganographic payload.
   final String? eventDate;
   final double? latitude;
   final double? longitude;
@@ -78,12 +104,10 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
 
   // ── Sharing ────────────────────────────────────────────────────────────────
 
-  /// Share a ticket as PNG — tries the already-uploaded cloud copy first.
   Future<void> _shareTicket(BlockModel block) async {
     final tempDir = await getTemporaryDirectory();
-    _showBrief('Preparing your ticket image…');
+    _showBrief('Getting your ticket ready…');
 
-    // storageIndex is 1-based (ticket_1, ticket_2, …).
     final storageIndex = block.index + 1;
     final localPath =
         await SupabaseStorageService.instance.downloadStegoTicketToTemp(
@@ -92,69 +116,134 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
       tempDir: tempDir.path,
     );
 
-    final sharePath =
+    final imagePath =
         localPath ?? '${tempDir.path}/stego_${block.ticket.ticketID}.png';
+
     if (localPath == null) {
-      // Re-embed locally as a fallback.
       await EventChainFFI.instance.embedTicket(
         eventName: widget.eventName,
-        blockIndex: block.index, // 0-based for FFI
-        stegoPath: sharePath,
+        blockIndex: block.index,
+        stegoPath: imagePath,
       );
     }
 
     if (!mounted) return;
-    if (await File(sharePath).exists()) {
-      await Share.shareXFiles(
-        [XFile(sharePath)],
-        subject: 'Your ticket: ${block.ticket.eventName}',
-      );
-    } else {
-      _showBrief('Could not prepare the ticket image.');
+    if (!await File(imagePath).exists()) {
+      _showBrief('Could not prepare the ticket. Please try again.');
+      return;
     }
+
+    await _shareAsZip(imagePath, block);
   }
 
-  /// Share as a specific format (PNG or BMP).
   Future<void> _shareTicketAsFormat(BlockModel block, int format) async {
     final tempDir = await getTemporaryDirectory();
-    _showBrief('Preparing your ticket…');
+    _showBrief('Getting your ticket ready…');
 
     final ext = format == ImageFormat.bmp ? 'bmp' : 'png';
     final outputPath = '${tempDir.path}/stego_${block.ticket.ticketID}.$ext';
 
-    // For PNG, prefer the cloud copy.
     if (format == ImageFormat.png) {
       final localPath =
           await SupabaseStorageService.instance.downloadStegoTicketToTemp(
         eventId: widget.eventId,
-        blockIndex: block.index + 1, // 1-based storage path
+        blockIndex: block.index + 1,
         tempDir: tempDir.path,
       );
       if (localPath != null && await File(localPath).exists()) {
         if (!mounted) return;
-        await Share.shareXFiles(
-          [XFile(localPath)],
-          subject: 'Your ${block.ticket.eventName} ticket (PNG)',
-        );
+        await _shareAsZip(localPath, block, ext: 'png');
         return;
       }
     }
 
-    // BMP or PNG fallback: re-embed via C++.
     final ok = await EventChainFFI.instance.embedTicket(
       eventName: widget.eventName,
-      blockIndex: block.index, // 0-based for FFI
+      blockIndex: block.index,
       stegoPath: outputPath,
     );
 
     if (!mounted) return;
     if (ok && await File(outputPath).exists()) {
-      await Share.shareXFiles(
-        [XFile(outputPath)],
-        subject: 'Your ${block.ticket.eventName} ticket (${ext.toUpperCase()})',
-      );
+      await _shareAsZip(outputPath, block, ext: ext);
     } else {
-      _showBrief('Could not prepare the ticket image.');
+      _showBrief('Could not prepare the ticket. Please try again.');
+    }
+  }
+
+  Future<void> _shareAsZip(String imagePath, BlockModel block,
+      {String ext = 'png'}) async {
+    try {
+      final imageBytes = await File(imagePath).readAsBytes();
+      final safeName =
+          block.ticket.eventName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+      final fileNameInZip = 'ticket_$safeName.$ext';
+
+      final archive = Archive();
+      archive
+          .addFile(ArchiveFile(fileNameInZip, imageBytes.length, imageBytes));
+
+      final zipBytes = ZipEncoder().encode(archive);
+      final tempDir = await getTemporaryDirectory();
+      final zipPath = '${tempDir.path}/ticket_${block.ticket.ticketID}.zip';
+      await File(zipPath).writeAsBytes(zipBytes);
+
+      await Share.shareXFiles(
+        [XFile(zipPath, mimeType: 'application/zip')],
+        subject: 'Ticket: ${block.ticket.eventName}',
+      );
+    } catch (e) {
+      if (mounted) _showBrief('Could not share. Please try again.');
+    }
+  }
+
+  Future<void> _saveToGallery(BlockModel block) async {
+    final tempDir = await getTemporaryDirectory();
+    _showBrief('Saving ticket to your gallery…');
+
+    final storageIndex = block.index + 1;
+    final localPath =
+        await SupabaseStorageService.instance.downloadStegoTicketToTemp(
+      eventId: widget.eventId,
+      blockIndex: storageIndex,
+      tempDir: tempDir.path,
+    );
+
+    String? imagePath = localPath;
+
+    if (imagePath == null) {
+      final fallbackPath = '${tempDir.path}/stego_${block.ticket.ticketID}.png';
+      await EventChainFFI.instance.embedTicket(
+        eventName: widget.eventName,
+        blockIndex: block.index,
+        stegoPath: fallbackPath,
+      );
+      imagePath = fallbackPath;
+    }
+
+    if (!mounted) return;
+    if (!await File(imagePath).exists()) {
+      _showBrief('Could not prepare the ticket. Please try again.');
+      return;
+    }
+
+    try {
+      String pathToSave = imagePath;
+      final lower = imagePath.toLowerCase();
+      if (!lower.endsWith('.png') &&
+          !lower.endsWith('.jpg') &&
+          !lower.endsWith('.jpeg')) {
+        final newPath =
+            '${tempDir.path}/ticket_${DateTime.now().millisecondsSinceEpoch}.png';
+        pathToSave = (await File(imagePath).copy(newPath)).path;
+      }
+
+      await Gal.putImage(pathToSave, album: 'EventChain');
+      if (mounted) _showBrief('Saved to "EventChain" in your gallery!');
+    } on GalException catch (e) {
+      if (mounted) _showBrief('Could not save: ${e.type}');
+    } catch (e) {
+      if (mounted) _showBrief('Could not save. Please try again.');
     }
   }
 
@@ -166,38 +255,11 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
     ));
   }
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
-
-  static String _formatDate(String? raw) {
-    if (raw == null || raw.isEmpty) return '';
-    try {
-      final dt = DateTime.parse(raw).toLocal();
-      const months = [
-        '',
-        'Jan',
-        'Feb',
-        'Mar',
-        'Apr',
-        'May',
-        'Jun',
-        'Jul',
-        'Aug',
-        'Sep',
-        'Oct',
-        'Nov',
-        'Dec'
-      ];
-      return '${dt.day.toString().padLeft(2, '0')} ${months[dt.month]} ${dt.year}';
-    } catch (_) {
-      return raw;
-    }
-  }
-
   // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    // Skip genesis block (index 0) — it has no ticket data.
+    // Skip genesis block (index 0) — it holds no ticket data.
     final tickets = _blocks.where((b) => b.index > 0).toList();
 
     return Scaffold(
@@ -260,196 +322,217 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
         ).then((_) => _loadBlocks()),
         icon: const Icon(Icons.add),
         label: Text(
-          'Issue Ticket',
+          'New Ticket',
           style: AppTheme.sans(
               fontSize: 13, fontWeight: FontWeight.w700, color: Colors.black),
         ),
       ),
-      body: Column(
-        children: [
-          // ── Poster ──────────────────────────────────────────────────────
-          if (widget.posterUrl.isNotEmpty)
-            SizedBox(
-              height: 160,
-              width: double.infinity,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.network(
-                    widget.posterUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                  ),
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          AppTheme.cardColor.withValues(alpha: 0.8)
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-          // ── Chain integrity banner ───────────────────────────────────────
-          if (_chainOk != null)
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 400),
-              width: double.infinity,
-              color:
-                  _chainOk! ? AppTheme.authenticColor : AppTheme.tamperedColor,
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    _chainOk!
-                        ? Icons.verified_outlined
-                        : Icons.warning_amber_rounded,
-                    color: Colors.black,
-                    size: 18,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    _chainOk!
-                        ? 'All tickets are genuine — nothing has been tampered with'
-                        : 'Warning: ticket data may have been altered',
-                    style: AppTheme.sans(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.black,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-          // ── Stats row ────────────────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Row(
-              children: [
-                _StatChip(value: '${_blocks.length}', label: 'BLOCKS'),
-                const SizedBox(width: 12),
-                _StatChip(value: '${tickets.length}', label: 'TICKETS ISSUED'),
-              ],
-            ),
-          ),
-
-          const Divider(height: 1),
-
-          // ── Event info ───────────────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      body: CustomScrollView(
+        physics: const BouncingScrollPhysics(),
+        slivers: [
+          // ── Collapsible Header Information ─────────────────────────────────
+          SliverToBoxAdapter(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    const Icon(Icons.calendar_today_rounded,
-                        size: 14, color: AppTheme.subTextColor),
-                    const SizedBox(width: 6),
-                    Text(
-                      _formatDate(widget.eventDate),
-                      style: AppTheme.sans(fontSize: 13),
-                    ),
-                    const Spacer(),
-                    const Icon(Icons.location_on_outlined,
-                        size: 14, color: AppTheme.subTextColor),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        widget.venue ?? 'No venue set',
-                        style: AppTheme.sans(fontSize: 13),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-                // ── Mini map (only when coordinates are available) ─────────
-                if (widget.latitude != null && widget.longitude != null) ...[
-                  const SizedBox(height: 12),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: SizedBox(
-                      height: 140,
-                      child: FlutterMap(
-                        options: MapOptions(
-                          initialCenter:
-                              LatLng(widget.latitude!, widget.longitude!),
-                          initialZoom: 15,
-                          interactionOptions: const InteractionOptions(
-                            flags: InteractiveFlag.none,
+                // Poster image
+                if (widget.posterUrl.isNotEmpty)
+                  SizedBox(
+                    height: 160,
+                    width: double.infinity,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.network(
+                          widget.posterUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                        ),
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                AppTheme.cardColor.withValues(alpha: 0.85),
+                              ],
+                            ),
                           ),
                         ),
-                        children: [
-                          TileLayer(
-                            urlTemplate:
-                                'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                            userAgentPackageName: 'com.example.eventchain',
+                      ],
+                    ),
+                  ),
+
+                // Integrity banner
+                if (_chainOk != null)
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 400),
+                    width: double.infinity,
+                    color: _chainOk!
+                        ? AppTheme.authenticColor
+                        : AppTheme.tamperedColor,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          _chainOk!
+                              ? Icons.verified_outlined
+                              : Icons.warning_amber_rounded,
+                          color: Colors.black,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            _chainOk!
+                                ? 'All tickets are genuine'
+                                : 'Warning: some tickets may be altered',
+                            style: AppTheme.sans(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.black,
+                            ),
                           ),
-                          MarkerLayer(
-                            markers: [
-                              Marker(
-                                point:
-                                    LatLng(widget.latitude!, widget.longitude!),
-                                width: 40,
-                                height: 40,
-                                child: const Icon(
-                                  Icons.location_on,
-                                  color: Color(0xFFFF1744),
-                                  size: 40,
-                                ),
-                              ),
-                            ],
+                        ),
+                      ],
+                    ),
+                  ),
+
+                // Stats row
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Row(
+                    children: [
+                      _StatChip(value: '${_blocks.length}', label: 'BLOCKS'),
+                      const SizedBox(width: 12),
+                      _StatChip(value: '${tickets.length}', label: 'TICKETS'),
+                    ],
+                  ),
+                ),
+
+                const Divider(height: 1),
+
+                // Event info & Mini Map
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.calendar_today_rounded,
+                              size: 14, color: AppTheme.subTextColor),
+                          const SizedBox(width: 6),
+                          Text(
+                            _formatDate(widget.eventDate),
+                            style: AppTheme.sans(fontSize: 13),
+                          ),
+                          const Spacer(),
+                          const Icon(Icons.location_on_outlined,
+                              size: 14, color: AppTheme.subTextColor),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              widget.venue ?? 'No venue set',
+                              style: AppTheme.sans(fontSize: 13),
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                         ],
                       ),
-                    ),
+                      if (widget.latitude != null &&
+                          widget.longitude != null) ...[
+                        const SizedBox(height: 12),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: SizedBox(
+                            height: 140,
+                            child: FlutterMap(
+                              options: MapOptions(
+                                initialCenter:
+                                    LatLng(widget.latitude!, widget.longitude!),
+                                initialZoom: 15,
+                                interactionOptions: const InteractionOptions(
+                                  flags: InteractiveFlag.none,
+                                ),
+                              ),
+                              children: [
+                                TileLayer(
+                                  urlTemplate:
+                                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                  userAgentPackageName:
+                                      'com.example.eventchain',
+                                ),
+                                MarkerLayer(
+                                  markers: [
+                                    Marker(
+                                      point: LatLng(
+                                          widget.latitude!, widget.longitude!),
+                                      width: 40,
+                                      height: 40,
+                                      child: const Icon(
+                                        Icons.location_on,
+                                        color: Color(0xFFFF1744),
+                                        size: 40,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                ],
+                ),
+                const Divider(height: 1),
               ],
             ),
           ),
 
-          const Divider(height: 1),
-
-          // ── Ticket list ──────────────────────────────────────────────────
-          Expanded(
-            child: tickets.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.confirmation_number_outlined,
-                            size: 48, color: AppTheme.subTextColor),
-                        const SizedBox(height: 16),
-                        Text('No tickets yet.',
-                            style: AppTheme.merri(
-                                fontSize: 16, color: AppTheme.subTextColor)),
-                        const SizedBox(height: 4),
-                        Text('Tap "Issue Ticket" to create the first one.',
-                            style: AppTheme.sans(
-                                fontSize: 13, color: AppTheme.subTextColor)),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
-                    itemCount: tickets.length,
-                    itemBuilder: (_, i) => _TicketCard(
-                      block: tickets[i],
-                      onShare: () => _shareTicket(tickets[i]),
-                      onShareAsFormat: (fmt) =>
-                          _shareTicketAsFormat(tickets[i], fmt),
-                    ),
+          // ── Ticket List Content ────────────────────────────────────────────
+          if (tickets.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.confirmation_number_outlined,
+                        size: 48, color: AppTheme.subTextColor),
+                    const SizedBox(height: 16),
+                    Text('No tickets yet',
+                        style: AppTheme.merri(
+                            fontSize: 16, color: AppTheme.subTextColor)),
+                    const SizedBox(height: 4),
+                    Text('Tap "New Ticket" to get started.',
+                        style: AppTheme.sans(
+                            fontSize: 13, color: AppTheme.subTextColor)),
+                  ],
+                ),
+              ),
+            )
+          else
+            SliverPadding(
+              // Generous bottom padding gives cards clear clearance over the FAB while scrolling
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _TicketCard(
+                    block: tickets[index],
+                    onShare: () => _shareTicket(tickets[index]),
+                    onShareAsFormat: (fmt) =>
+                        _shareTicketAsFormat(tickets[index], fmt),
+                    onSaveToGallery: () => _saveToGallery(tickets[index]),
                   ),
-          ),
+                  childCount: tickets.length,
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -499,11 +582,13 @@ class _TicketCard extends StatelessWidget {
   final BlockModel block;
   final VoidCallback onShare;
   final ValueChanged<int> onShareAsFormat;
+  final VoidCallback onSaveToGallery;
 
   const _TicketCard({
     required this.block,
     required this.onShare,
     required this.onShareAsFormat,
+    required this.onSaveToGallery,
   });
 
   Color _typeColor(String type) => switch (type.toLowerCase()) {
@@ -513,8 +598,7 @@ class _TicketCard extends StatelessWidget {
         _ => AppTheme.primaryColor,
       };
 
-  void _showFormatMenu(
-      BuildContext context, ValueChanged<int> onShareAsFormat) {
+  void _showOptionsMenu(BuildContext context) {
     showModalBottomSheet(
       context: context,
       backgroundColor: AppTheme.cardColor,
@@ -523,26 +607,35 @@ class _TicketCard extends StatelessWidget {
       ),
       builder: (ctx) => SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Share Ticket As',
+              Text('Ticket Options',
                   style: AppTheme.merri(
                       fontSize: 18, fontWeight: FontWeight.w700)),
               const SizedBox(height: 4),
               Text(
-                'Only lossless formats work — compressed formats destroy the hidden data.',
+                'Choose how to save or share this ticket.',
                 style:
                     AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor),
               ),
               const SizedBox(height: 16),
               _FormatOption(
+                icon: Icons.save_alt_outlined,
+                label: 'Save to Gallery',
+                subtitle: 'Saves image to the "EventChain" album on your phone',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  onSaveToGallery();
+                },
+              ),
+              const Divider(height: 24),
+              _FormatOption(
                 icon: Icons.image_outlined,
-                label: 'PNG (Recommended)',
-                subtitle:
-                    'Lossless · preserves hidden data · smallest file size',
+                label: 'Share as PNG',
+                subtitle: 'Smaller file · sent as a zip',
                 onTap: () {
                   Navigator.pop(ctx);
                   onShareAsFormat(ImageFormat.png);
@@ -550,13 +643,14 @@ class _TicketCard extends StatelessWidget {
               ),
               _FormatOption(
                 icon: Icons.image,
-                label: 'BMP',
-                subtitle: 'Lossless · uncompressed · larger file size',
+                label: 'Share as BMP',
+                subtitle: 'Larger file · sent as a zip',
                 onTap: () {
                   Navigator.pop(ctx);
                   onShareAsFormat(ImageFormat.bmp);
                 },
               ),
+              const SizedBox(height: 8),
             ],
           ),
         ),
@@ -570,7 +664,7 @@ class _TicketCard extends StatelessWidget {
     final typeColor = _typeColor(t.ticketType);
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
         color: AppTheme.cardMidColor,
         borderRadius: BorderRadius.circular(12),
@@ -579,7 +673,6 @@ class _TicketCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Colour accent bar
           Container(
             height: 4,
             decoration: BoxDecoration(
@@ -613,15 +706,17 @@ class _TicketCard extends StatelessWidget {
                 Text(t.eventName,
                     style: AppTheme.merri(
                         fontSize: 15, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 4),
+                const SizedBox(height: 6),
                 Row(
                   children: [
                     const Icon(Icons.calendar_today_outlined,
                         size: 13, color: AppTheme.subTextColor),
                     const SizedBox(width: 4),
-                    Text(t.eventDate,
-                        style: AppTheme.sans(
-                            fontSize: 12, color: AppTheme.subTextColor)),
+                    Text(
+                      _formatDate(t.eventDate),
+                      style: AppTheme.sans(
+                          fontSize: 12, color: AppTheme.subTextColor),
+                    ),
                     const SizedBox(width: 10),
                     const Icon(Icons.location_on_outlined,
                         size: 13, color: AppTheme.subTextColor),
@@ -634,7 +729,7 @@ class _TicketCard extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 4),
                 Row(
                   children: [
                     const Icon(Icons.person_outline,
@@ -652,60 +747,56 @@ class _TicketCard extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 14),
+                Text(
+                  'MWK ${t.price.toStringAsFixed(2)}',
+                  style: AppTheme.merri(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.primaryColor),
+                ),
+                const SizedBox(height: 10),
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'MWK ${t.price.toStringAsFixed(2)}',
-                      style: AppTheme.merri(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                          color: AppTheme.primaryColor),
+                    OutlinedButton(
+                      onPressed: () => _showOptionsMenu(context),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: typeColor,
+                        side:
+                            BorderSide(color: typeColor.withValues(alpha: 0.7)),
+                        backgroundColor: typeColor.withValues(alpha: 0.07),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 8),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: Icon(Icons.more_vert, size: 16, color: typeColor),
                     ),
-                    Row(
-                      children: [
-                        OutlinedButton(
-                          onPressed: () =>
-                              _showFormatMenu(context, onShareAsFormat),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: typeColor,
-                            side: BorderSide(
-                                color: typeColor.withValues(alpha: 0.7)),
-                            backgroundColor: typeColor.withValues(alpha: 0.07),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 8),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          child:
-                              Icon(Icons.more_vert, size: 16, color: typeColor),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: onShare,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: typeColor,
+                          side: BorderSide(
+                              color: typeColor.withValues(alpha: 0.7)),
+                          backgroundColor: typeColor.withValues(alpha: 0.07),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 8),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
                         ),
-                        const SizedBox(width: 8),
-                        OutlinedButton.icon(
-                          onPressed: onShare,
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: typeColor,
-                            side: BorderSide(
-                                color: typeColor.withValues(alpha: 0.7)),
-                            backgroundColor: typeColor.withValues(alpha: 0.07),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 14, vertical: 8),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                          ),
-                          icon: const Icon(Icons.share_outlined, size: 16),
-                          label: Text(
-                            'SHARE',
-                            style: AppTheme.sans(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.5,
-                                color: typeColor),
-                          ),
+                        icon: const Icon(Icons.share_outlined, size: 16),
+                        label: Text(
+                          'SHARE',
+                          style: AppTheme.sans(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.5,
+                              color: typeColor),
                         ),
-                      ],
+                      ),
                     ),
                   ],
                 ),

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:archive/archive_io.dart'; // Handles ZIP decoding
 import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -24,6 +25,10 @@ sealed class ScanError implements Exception {
 
 final class ImageReadError extends ScanError {
   const ImageReadError(super.message);
+}
+
+final class ZipExtractError extends ScanError {
+  const ZipExtractError(super.message);
 }
 
 final class NoChainsError extends ScanError {
@@ -79,9 +84,15 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['png', 'jpg', 'jpeg', 'bmp'],
+        allowedExtensions: [
+          'png',
+          'jpg',
+          'jpeg',
+          'bmp',
+          'zip'
+        ], // Extended to support zip archives
         allowMultiple: false,
-        withData: false, // We only need path
+        withData: false,
       );
 
       if (result == null || result.files.isEmpty) return;
@@ -91,12 +102,80 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         throw const ImageReadError('Could not access selected file');
       }
 
-      await _verifyImage(file.path!);
+      // Check if payload needs archive expansion handling
+      if (file.path!.toLowerCase().endsWith('.zip')) {
+        await _processZipAndVerify(file.path!);
+      } else {
+        await _verifyImage(file.path!);
+      }
     } catch (e) {
-      _showError('Failed to pick file: $e');
+      _safeSetState(() => _scanning = false);
+      _showError('$e');
     } finally {
       completer.complete();
       _pendingScan = null;
+    }
+  }
+
+  // ── ZIP Decompression Handler ──────────────────────────────────────────
+  Future<void> _processZipAndVerify(String zipPath) async {
+    _safeSetState(() {
+      _scanning = true;
+      _statusMessage = 'Unpacking ZIP archive…';
+    });
+
+    String? extractedImagePath;
+
+    try {
+      final zipFile = File(zipPath);
+      if (!await zipFile.exists()) {
+        throw const ZipExtractError('ZIP archive file no longer exists');
+      }
+
+      // Read and decode the compressed payload bytes
+      final bytes = await zipFile.readAsBytes();
+      final archive = ZipDecoder().decodeBytes(bytes);
+
+      ArchiveFile? targetImageFile;
+      for (final file in archive) {
+        if (file.isFile) {
+          final ext = file.name.split('.').last.toLowerCase();
+          if (['png', 'jpg', 'jpeg', 'bmp'].contains(ext)) {
+            targetImageFile = file;
+            break; // Extract first matching graphic object asset found
+          }
+        }
+      }
+
+      if (targetImageFile == null) {
+        throw const ZipExtractError(
+            'No valid ticket images (.png, .bmp, .jpg) found inside ZIP');
+      }
+
+      final tempDir = await getTemporaryDirectory();
+      extractedImagePath =
+          '${tempDir.path}/extracted_${DateTime.now().millisecondsSinceEpoch}_${targetImageFile.name}';
+
+      // Write uncompressed target asset directly to temporary workspace cache
+      final extractedData = targetImageFile.content as List<int>;
+      await File(extractedImagePath).writeAsBytes(extractedData);
+
+      // Pass the fully unpacked image asset path to standard verification pipeline
+      await _verifyImage(extractedImagePath);
+    } on ScanError {
+      rethrow;
+    } catch (e) {
+      throw ZipExtractError('Failed to parse ZIP archive contents: $e');
+    } finally {
+      // Clean up the intermediate uncompressed extraction artifact safely
+      if (extractedImagePath != null) {
+        final localFile = File(extractedImagePath);
+        if (localFile.existsSync()) {
+          try {
+            localFile.deleteSync();
+          } catch (_) {}
+        }
+      }
     }
   }
 
@@ -111,7 +190,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     final ts = DateTime.now().millisecondsSinceEpoch;
     final ext = sourcePath.split('.').last.toLowerCase();
 
-    // Create a stable copy
     final String persistentPath = '${tempDir.path}/scan_orig_$ts.$ext';
     final persistentFile = _AutoDeleteFile(persistentPath);
 
@@ -131,7 +209,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       debugPrint(
           '[Scanner] Image ready: $persistentPath (${(fileBytes / 1024).toStringAsFixed(1)} KB)');
 
-      // Ensure chains are loaded
       final ffi = EventChainFFI.instance;
       List<String> eventNames = ffi.listEvents();
 
@@ -142,10 +219,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       if (eventNames.isEmpty) throw const NoChainsError();
 
-      // Run verification
       final result = await _runVerification(ffi, eventNames, persistentPath);
 
-      // Supabase cross-check
       Map<String, dynamic>? dbData;
       if (result.verified &&
           result.eventName != null &&
@@ -276,7 +351,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
   Future<Map<String, dynamic>?> _supabaseLookupByImageHash(
       String imagePath) async {
-    // TODO: implement perceptual hash lookup
     return null;
   }
 
@@ -367,12 +441,12 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           ),
           const SizedBox(height: 40),
           Text(
-            'Select Ticket Image',
+            'Select Ticket Payload',
             style: AppTheme.merri(fontSize: 24, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
           Text(
-            'Pick a PNG, JPG, or BMP file containing\nan embedded ticket.',
+            'Pick a PNG, BMP, or ZIP archive file\ncontaining ticket.',
             textAlign: TextAlign.center,
             style: AppTheme.sans(fontSize: 14, color: AppTheme.subTextColor),
           ),
@@ -393,7 +467,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                 onPressed: _pickImageFile,
                 icon: const Icon(Icons.folder_open, size: 22),
                 label: Text(
-                  'PICK IMAGE FILE',
+                  'PICK FILE PAYLOAD',
                   style: AppTheme.sans(
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
@@ -410,7 +484,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   }
 }
 
-// ── Internal result type ──────────────────────────────────────────────────
 class _ScanResult {
   final bool verified;
   final String? eventName;
