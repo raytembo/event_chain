@@ -80,5 +80,10 @@ subprojects {
                 }
             }
         }
+        
+        // Silences the lint warnings from third-party Java plugins
+        project.tasks.withType(JavaCompile) {
+            options.compilerArgs << "-Xlint:-deprecation"
+        }
     }
 }

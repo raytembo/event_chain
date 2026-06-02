@@ -18,6 +18,7 @@ dependencies:
 
   # ── Supabase (replaces Isar) ───────────────────────────────────────────────
   supabase_flutter: ^2.8.4
+  nearby_connections: ^4.3.0
 
   # File system & paths
   path_provider: ^2.1.3

@@ -1,6 +1,7 @@
 // lib/features/scanner/scanner_screen.dart
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +9,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:archive/archive_io.dart'; // Handles ZIP decoding
 import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:nearby_connections/nearby_connections.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/ffi_bridge/eventchain_ffi.dart';
 import '../../shared/theme/app_theme.dart';
@@ -69,11 +72,200 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   String _statusMessage = '';
   Future<void>? _pendingScan;
 
+  // Nearby Connections P2P State
+  bool _isAdvertising = false;
+  String? _connectedEndpointId;
+
+  // Cache to map a framework payload transfer ID directly to its temporary file URI
+  final Map<int, String> _incomingFileUris = {};
+
+  @override
+  void dispose() {
+    if (_isAdvertising) {
+      Nearby().stopAdvertising();
+    }
+    if (_connectedEndpointId != null) {
+      Nearby().disconnectFromEndpoint(_connectedEndpointId!);
+    }
+    super.dispose();
+  }
+
   void _safeSetState(VoidCallback fn) {
     if (mounted) setState(fn);
   }
 
   void _setStatus(String msg) => _safeSetState(() => _statusMessage = msg);
+
+  // ── Nearby Connections (P2P Stream Lifecycle) ───────────────────────────
+
+  Future<bool> _requestP2PPermissions() async {
+    final statuses = await [
+      Permission.location,
+      Permission.bluetoothAdvertise,
+      Permission.bluetoothConnect,
+      Permission.bluetoothScan,
+      Permission.nearbyWifiDevices,
+    ].request();
+
+    return statuses.values.every((status) => status.isGranted);
+  }
+
+  Future<void> _toggleNearbyReceiver() async {
+    if (_isAdvertising) {
+      await Nearby().stopAdvertising();
+      if (_connectedEndpointId != null) {
+        await Nearby().disconnectFromEndpoint(_connectedEndpointId!);
+      }
+      _safeSetState(() {
+        _isAdvertising = false;
+        _connectedEndpointId = null;
+      });
+      return;
+    }
+
+    final allowed = await _requestP2PPermissions();
+    if (!allowed) {
+      _showError("P2P sharing requires Location and Bluetooth permissions.");
+      return;
+    }
+
+    _safeSetState(() {
+      _scanning = true;
+      _statusMessage = 'Initializing local P2P discovery server…';
+    });
+
+    try {
+      await Nearby().startAdvertising(
+        "Ticket_Receiver_${Platform.localHostname}",
+        Strategy.P2P_STAR,
+        onConnectionInitiated: (endpointId, connectionInfo) async {
+          _setStatus('Connecting to ${connectionInfo.endpointName}…');
+          await Nearby().acceptConnection(
+            endpointId,
+            onPayLoadRecieved: _onP2PPayloadReceived,
+            onPayloadTransferUpdate: _onP2PPayloadTransferUpdate,
+          );
+        },
+        onConnectionResult: (endpointId, status) {
+          if (status == Status.CONNECTED) {
+            _safeSetState(() {
+              _connectedEndpointId = endpointId;
+              _scanning = true;
+              _statusMessage = 'Connected! Waiting for sender payload…';
+            });
+          } else {
+            _safeSetState(() {
+              _scanning = false;
+              _connectedEndpointId = null;
+            });
+            _showError('Connection failed.');
+          }
+        },
+        onDisconnected: (endpointId) {
+          _safeSetState(() {
+            _connectedEndpointId = null;
+            if (_scanning && _statusMessage.contains('Waiting for sender')) {
+              _scanning = false;
+            }
+          });
+          _showError('Sender disconnected.');
+        },
+      );
+
+      _safeSetState(() {
+        _isAdvertising = true;
+        _statusMessage =
+            'Visible to nearby senders. Open Share menu on source…';
+      });
+    } catch (e) {
+      _safeSetState(() {
+        _scanning = false;
+        _isAdvertising = false;
+      });
+      _showError('Could not start P2P sharing platform: $e');
+    }
+  }
+
+  void _onP2PPayloadReceived(String endpointId, Payload payload) {
+    if (payload.type == PayloadType.FILE) {
+      if (payload.uri != null) {
+        _incomingFileUris[payload.id] = payload.uri!;
+        _setStatus('Receiving inbound file container stream…');
+      }
+    }
+  }
+
+  void _onP2PPayloadTransferUpdate(
+      String endpointId, PayloadTransferUpdate update) async {
+    switch (update.status) {
+      case PayloadStatus.IN_PROGRESS:
+        if (update.totalBytes > 0) {
+          final progress = (update.bytesTransferred / update.totalBytes * 100)
+              .toStringAsFixed(0);
+          _setStatus('Downloading data payload: $progress%');
+        }
+        break;
+
+      case PayloadStatus.SUCCESS:
+        final String? tempUriPath = _incomingFileUris[update.id];
+
+        if (tempUriPath != null) {
+          _setStatus('Extracting local transport stream…');
+          try {
+            final tempDir = await getTemporaryDirectory();
+            final String originalFileName = tempUriPath.split('/').last;
+            final targetDestPath =
+                '${tempDir.path}/p2p_${DateTime.now().millisecondsSinceEpoch}_$originalFileName';
+
+            await Nearby()
+                .copyFileAndDeleteOriginal(tempUriPath, targetDestPath);
+
+            _incomingFileUris.remove(update.id);
+
+            // ── FIX 1: Direct inspect file signatures (Magic Bytes) ──
+            final file = File(targetDestPath);
+            bool isZipFile = false;
+
+            if (await file.exists()) {
+              final raf = await file.open(mode: FileMode.read);
+              final bytes = await raf.read(4);
+              await raf.close();
+
+              // ZIP files always start with 'PK' hex markers (0x50, 0x4B)
+              if (bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4B) {
+                isZipFile = true;
+              }
+            }
+
+            if (isZipFile || targetDestPath.toLowerCase().endsWith('.zip')) {
+              await _processZipAndVerify(targetDestPath);
+            } else {
+              await _verifyImage(targetDestPath);
+            }
+          } catch (e) {
+            _safeSetState(() => _scanning = false);
+            _showError('Failed to decode incoming streaming container: $e');
+          }
+        } else {
+          _safeSetState(() => _scanning = false);
+          _showError('Payload verified transfer but index tracking was lost.');
+        }
+        break;
+
+      case PayloadStatus.FAILURE:
+        _safeSetState(() => _scanning = false);
+        _incomingFileUris.remove(update.id);
+        _showError('Local connection transfer dropped.');
+        break;
+
+      case PayloadStatus.NONE:
+        break;
+      case PayloadStatus.CANCELED:
+        _safeSetState(() => _scanning = false);
+        _showError('Transfer canceled.');
+        break;
+    }
+  }
 
   // ── File Picker ─────────────────────────────────────────────────────────
   Future<void> _pickImageFile() async {
@@ -84,13 +276,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: [
-          'png',
-          'jpg',
-          'jpeg',
-          'bmp',
-          'zip'
-        ], // Extended to support zip archives
+        allowedExtensions: ['png', 'jpg', 'jpeg', 'bmp', 'zip'],
         allowMultiple: false,
         withData: false,
       );
@@ -102,7 +288,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         throw const ImageReadError('Could not access selected file');
       }
 
-      // Check if payload needs archive expansion handling
       if (file.path!.toLowerCase().endsWith('.zip')) {
         await _processZipAndVerify(file.path!);
       } else {
@@ -132,7 +317,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         throw const ZipExtractError('ZIP archive file no longer exists');
       }
 
-      // Read and decode the compressed payload bytes
       final bytes = await zipFile.readAsBytes();
       final archive = ZipDecoder().decodeBytes(bytes);
 
@@ -142,7 +326,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           final ext = file.name.split('.').last.toLowerCase();
           if (['png', 'jpg', 'jpeg', 'bmp'].contains(ext)) {
             targetImageFile = file;
-            break; // Extract first matching graphic object asset found
+            break;
           }
         }
       }
@@ -156,18 +340,15 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       extractedImagePath =
           '${tempDir.path}/extracted_${DateTime.now().millisecondsSinceEpoch}_${targetImageFile.name}';
 
-      // Write uncompressed target asset directly to temporary workspace cache
       final extractedData = targetImageFile.content as List<int>;
       await File(extractedImagePath).writeAsBytes(extractedData);
 
-      // Pass the fully unpacked image asset path to standard verification pipeline
       await _verifyImage(extractedImagePath);
     } on ScanError {
       rethrow;
     } catch (e) {
       throw ZipExtractError('Failed to parse ZIP archive contents: $e');
     } finally {
-      // Clean up the intermediate uncompressed extraction artifact safely
       if (extractedImagePath != null) {
         final localFile = File(extractedImagePath);
         if (localFile.existsSync()) {
@@ -188,7 +369,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
     final tempDir = await getTemporaryDirectory();
     final ts = DateTime.now().millisecondsSinceEpoch;
-    final ext = sourcePath.split('.').last.toLowerCase();
+
+    // ── FIX 2: Safe Extension Extraction Strategy ──
+    String ext = 'png'; // Fallback default
+    final filename = sourcePath.split('/').last;
+    final dotIdx = filename.lastIndexOf('.');
+    if (dotIdx != -1 && dotIdx < filename.length - 1) {
+      ext = filename.substring(dotIdx + 1).toLowerCase();
+    }
 
     final String persistentPath = '${tempDir.path}/scan_orig_$ts.$ext';
     final persistentFile = _AutoDeleteFile(persistentPath);
@@ -263,7 +451,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     }
   }
 
-  // ── Verification loop (unchanged) ─────────────────────────────────────
+  // ── Verification loop ─────────────────────────────────────────────────
   Future<_ScanResult> _runVerification(
     EventChainFFI ffi,
     List<String> eventNames,
@@ -300,7 +488,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     return const _ScanResult(verified: false);
   }
 
-  // ── Chain download & Supabase (unchanged) ─────────────────────────────
+  // ── Chain download & Supabase ─────────────────────────────────────────
   Future<List<String>> _tryDownloadChains() async {
     try {
       final supabase = Supabase.instance.client;
@@ -375,6 +563,15 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         backgroundColor: AppTheme.cardColor,
         elevation: 0,
         title: Text('Ticket Scanner', style: AppTheme.merri(fontSize: 20)),
+        actions: [
+          if (_scanning)
+            IconButton(
+              icon: const Icon(Icons.close, color: Colors.white),
+              onPressed: () {
+                _safeSetState(() => _scanning = false);
+              },
+            )
+        ],
       ),
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 300),
@@ -419,66 +616,115 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   Widget _buildIdle() {
     return Center(
       key: const ValueKey('idle'),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            width: 170,
-            height: 170,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: AppTheme.primaryColor.withValues(alpha: 0.1),
-              border: Border.all(
-                color: AppTheme.primaryColor.withValues(alpha: 0.3),
-                width: 3,
-              ),
-            ),
-            child: const Icon(
-              Icons.image_rounded,
-              size: 80,
-              color: AppTheme.primaryColor,
-            ),
-          ),
-          const SizedBox(height: 40),
-          Text(
-            'Select Ticket Payload',
-            style: AppTheme.merri(fontSize: 24, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Pick a PNG, BMP, or ZIP archive file\ncontaining ticket.',
-            textAlign: TextAlign.center,
-            style: AppTheme.sans(fontSize: 14, color: AppTheme.subTextColor),
-          ),
-          const SizedBox(height: 48),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 40),
-            child: SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.primaryColor,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                onPressed: _pickImageFile,
-                icon: const Icon(Icons.folder_open, size: 22),
-                label: Text(
-                  'PICK FILE PAYLOAD',
-                  style: AppTheme.sans(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.black,
-                  ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 170,
+              height: 170,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _isAdvertising
+                    ? Colors.green.withValues(alpha: 0.1)
+                    : AppTheme.primaryColor.withValues(alpha: 0.1),
+                border: Border.all(
+                  color: _isAdvertising
+                      ? Colors.green
+                      : AppTheme.primaryColor.withValues(alpha: 0.3),
+                  width: 3,
                 ),
               ),
+              child: Icon(
+                _isAdvertising
+                    ? Icons.wifi_tethering_rounded
+                    : Icons.image_rounded,
+                size: 80,
+                color: _isAdvertising ? Colors.green : AppTheme.primaryColor,
+              ),
             ),
-          ),
-          const SizedBox(height: 60),
-        ],
+            const SizedBox(height: 40),
+            Text(
+              _isAdvertising ? 'P2P Network Active' : 'Select Ticket Payload',
+              style: AppTheme.merri(fontSize: 24, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _isAdvertising
+                  ? 'Ready to capture incoming file transfers…\nKeep your sender device nearby.'
+                  : 'Pick a PNG, BMP, or ZIP archive file\ncontaining ticket payloads.',
+              textAlign: TextAlign.center,
+              style: AppTheme.sans(fontSize: 14, color: AppTheme.subTextColor),
+            ),
+            const SizedBox(height: 48),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 40),
+              child: Column(
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.primaryColor,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      onPressed: _pickImageFile,
+                      icon: const Icon(Icons.folder_open, size: 22),
+                      label: Text(
+                        'PICK FILE PAYLOAD',
+                        style: AppTheme.sans(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.black,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor:
+                            _isAdvertising ? Colors.red : Colors.white,
+                        side: BorderSide(
+                          color: _isAdvertising
+                              ? Colors.red
+                              : AppTheme.primaryColor,
+                          width: 2,
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      onPressed: _toggleNearbyReceiver,
+                      icon: Icon(
+                          _isAdvertising
+                              ? Icons.portable_wifi_off
+                              : Icons.rss_feed,
+                          size: 22),
+                      label: Text(
+                        _isAdvertising
+                            ? 'STOP WIRELESS RECEIVE'
+                            : 'RECEIVE VIA NEARBY SHARE',
+                        style: AppTheme.sans(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 60),
+          ],
+        ),
       ),
     );
   }

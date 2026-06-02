@@ -5,6 +5,7 @@
 //   • Download to gallery (via gal library)
 //   • Share via system share sheet (Image & ZIP formats)
 //   • Event details joined from events table
+//   • P2P Direct Sending to local Verification Terminals via Nearby Connections
 
 import 'dart:convert';
 import 'dart:io';
@@ -17,6 +18,8 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:nearby_connections/nearby_connections.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../shared/theme/app_theme.dart';
 import '../../shared/utilities/currency_formatter.dart';
@@ -29,7 +32,6 @@ final myTicketsProvider =
   final userId = supabase.auth.currentUser?.id;
   if (userId == null) return [];
 
-  // Join tickets → events so we get event_name, venue, event_date
   final res = await supabase
       .from('payments')
       .select('*, tickets(*, event:events(event_name, event_date, venue))')
@@ -106,8 +108,6 @@ class _WalletCardState extends State<_WalletCard> {
   bool _isDownloading = false;
   bool _isZipping = false;
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
-
   static String _formatDate(dynamic raw) {
     if (raw == null) return '';
     try {
@@ -158,17 +158,13 @@ class _WalletCardState extends State<_WalletCard> {
     setState(() => _isDownloading = true);
 
     try {
-      // Check / request gallery permission
       final hasAccess = await Gal.hasAccess(toAlbum: true);
       if (!hasAccess) {
         final granted = await Gal.requestAccess(toAlbum: true);
         if (!granted) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-              'Gallery permission denied.',
-              style: AppTheme.sans(),
-            ),
+            content: Text('Gallery permission denied.', style: AppTheme.sans()),
             backgroundColor: AppTheme.tamperedColor,
             behavior: SnackBarBehavior.floating,
             duration: const Duration(seconds: 3),
@@ -177,30 +173,22 @@ class _WalletCardState extends State<_WalletCard> {
         }
       }
 
-      // Fetch image bytes from Supabase Storage public URL
       final response = await http.get(Uri.parse(stegoUrl));
       if (response.statusCode != 200) {
         throw Exception('Download failed (HTTP ${response.statusCode})');
       }
 
-      // Write to a temp file then hand off to gal
       final tempDir = await getTemporaryDirectory();
       final fileName = 'ticket_$ticketId.png';
       final tempFile = File('${tempDir.path}/$fileName');
       await tempFile.writeAsBytes(response.bodyBytes);
 
-      // Save to gallery (creates "EventChain Tickets" album where supported)
       await Gal.putImage(tempFile.path, album: 'EventChain Tickets');
-
-      // Clean up temp file
       await tempFile.delete();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-          'Saved to gallery',
-          style: AppTheme.sans(),
-        ),
+        content: Text('Saved to gallery', style: AppTheme.sans()),
         backgroundColor: AppTheme.authenticColor,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 3),
@@ -282,22 +270,17 @@ class _WalletCardState extends State<_WalletCard> {
 
     try {
       final response = await http.get(Uri.parse(stegoUrl));
-      if (response.statusCode != 200)
+      if (response.statusCode != 200) {
         throw Exception('Could not fetch image asset');
+      }
 
       final imageBytes = response.bodyBytes;
       final archive = Archive();
 
-      // 1. Add stego ticket image to archive
       archive.addFile(
-        ArchiveFile(
-          'ticket_$ticketId.png',
-          imageBytes.length,
-          imageBytes,
-        ),
+        ArchiveFile('ticket_$ticketId.png', imageBytes.length, imageBytes),
       );
 
-      // 2. Generate and add metadata text file manifest
       final manifestText = '''
 ==================================================
               EVENTCHAIN TICKET MANIFEST          
@@ -316,14 +299,9 @@ Generated securely via EventChain System.
 ''';
       final manifestBytes = utf8.encode(manifestText);
       archive.addFile(
-        ArchiveFile(
-          'ticket_details.txt',
-          manifestBytes.length,
-          manifestBytes,
-        ),
+        ArchiveFile('ticket_details.txt', manifestBytes.length, manifestBytes),
       );
 
-      // 3. Compress into ZIP archive layout
       final zipEncoder = ZipEncoder();
       final zipBytes = zipEncoder.encode(archive);
       if (zipBytes == null)
@@ -333,7 +311,6 @@ Generated securely via EventChain System.
       final zipFile = File('${tempDir.path}/ticket_$ticketId.zip');
       await zipFile.writeAsBytes(zipBytes);
 
-      // 4. Fire share sheet targeting the generated binary format
       await Share.shareXFiles(
         [XFile(zipFile.path, mimeType: 'application/zip')],
         subject: 'EventChain Archive - $eventName',
@@ -353,7 +330,40 @@ Generated securely via EventChain System.
     }
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
+  // Opens the P2P Sending Platform Interface
+  void _openNearbyTransmissionSheet({
+    required String stegoUrl,
+    required String ticketId,
+    required String eventName,
+    required String eventDate,
+    required String venue,
+    required String ownerName,
+    required String ticketType,
+    required double price,
+    required int blockIndex,
+    required Color accentColor,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.cardColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => _NearbySendBottomSheet(
+        stegoUrl: stegoUrl,
+        ticketId: ticketId,
+        eventName: eventName,
+        eventDate: eventDate,
+        venue: venue,
+        ownerName: ownerName,
+        ticketType: ticketType,
+        price: price,
+        blockIndex: blockIndex,
+        accentColor: accentColor,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -389,15 +399,12 @@ Generated securely via EventChain System.
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Stego ticket image ───────────────────────────────────────────
           _buildTicketImage(stegoUrl, typeColor),
-
           Padding(
             padding: const EdgeInsets.all(20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Type badge + ticket ID
                 Row(
                   children: [
                     Container(
@@ -427,10 +434,7 @@ Generated securely via EventChain System.
                     ),
                   ],
                 ),
-
                 const SizedBox(height: 16),
-
-                // Perforation line
                 Row(
                   children: List.generate(
                     32,
@@ -443,19 +447,13 @@ Generated securely via EventChain System.
                     ),
                   ),
                 ),
-
                 const SizedBox(height: 16),
-
-                // Event name
                 Text(
                   eventName,
                   style:
                       AppTheme.merri(fontSize: 19, fontWeight: FontWeight.w700),
                 ),
-
                 const SizedBox(height: 8),
-
-                // Date + Venue
                 Row(
                   children: [
                     const Icon(Icons.calendar_today,
@@ -478,10 +476,7 @@ Generated securely via EventChain System.
                     ),
                   ],
                 ),
-
                 const SizedBox(height: 10),
-
-                // Owner
                 Row(
                   children: [
                     const Icon(Icons.person_outline,
@@ -494,10 +489,7 @@ Generated securely via EventChain System.
                     ),
                   ],
                 ),
-
                 const SizedBox(height: 20),
-
-                // Price + Block
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   crossAxisAlignment: CrossAxisAlignment.end,
@@ -520,19 +512,35 @@ Generated securely via EventChain System.
                     ),
                   ],
                 ),
-
                 const SizedBox(height: 16),
-
-                // Divider
                 Divider(color: Colors.white.withValues(alpha: 0.08)),
-
                 const SizedBox(height: 12),
-
-                // Download + Share Actions Matrix
                 if (stegoUrl != null)
                   Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      // High-priority ecosystem feature: Wireless delivery pipeline
+                      SizedBox(
+                        width: double.infinity,
+                        child: _ActionButton(
+                          icon: Icons.wifi_tethering_rounded,
+                          label: 'SEND VIA NEARBY SHARE',
+                          color: typeColor,
+                          onTap: () => _openNearbyTransmissionSheet(
+                            stegoUrl: stegoUrl,
+                            ticketId: ticketId,
+                            eventName: eventName,
+                            eventDate: eventDate,
+                            venue: venue,
+                            ownerName: ownerName,
+                            ticketType: ticketType,
+                            price: price,
+                            blockIndex: blockIndex,
+                            accentColor: typeColor,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                       Row(
                         children: [
                           Expanded(
@@ -542,6 +550,7 @@ Generated securely via EventChain System.
                                   : Icons.download_rounded,
                               label: _isDownloading ? 'Saving…' : 'Download',
                               color: typeColor,
+                              outlined: true,
                               loading: _isDownloading,
                               onTap: _isDownloading
                                   ? null
@@ -608,8 +617,6 @@ Generated securely via EventChain System.
     );
   }
 
-  // ── Stego image widget ─────────────────────────────────────────────────────
-
   Widget _buildTicketImage(String? stegoUrl, Color typeColor) {
     if (stegoUrl == null || stegoUrl.isEmpty) {
       return _imagePlaceholder(typeColor);
@@ -665,6 +672,359 @@ Generated securely via EventChain System.
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P2P Transmitter Console Drawer
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _NearbySendBottomSheet extends StatefulWidget {
+  final String stegoUrl;
+  final String ticketId;
+  final String eventName;
+  final String eventDate;
+  final String venue;
+  final String ownerName;
+  final String ticketType;
+  final double price;
+  final int blockIndex;
+  final Color accentColor;
+
+  const _NearbySendBottomSheet({
+    required this.stegoUrl,
+    required this.ticketId,
+    required this.eventName,
+    required this.eventDate,
+    required this.venue,
+    required this.ownerName,
+    required this.ticketType,
+    required this.price,
+    required this.blockIndex,
+    required this.accentColor,
+  });
+
+  @override
+  State<_NearbySendBottomSheet> createState() => _NearbySendBottomSheetState();
+}
+
+class _NearbySendBottomSheetState extends State<_NearbySendBottomSheet> {
+  final List<Map<String, String>> _discoveredScanners = [];
+  String _statusMessage = 'Initializing local hardware link…';
+  bool _preparingBundle = true;
+  bool _isConnected = false;
+  bool _isSending = false;
+  String? _connectedEndpointId;
+  double _transmissionProgress = 0.0;
+  File? _compiledPayloadFile;
+
+  @override
+  void initState() {
+    super.initState();
+    _assemblePackageAndDiscover();
+  }
+
+  @override
+  void dispose() {
+    Nearby().stopDiscovery();
+    if (_connectedEndpointId != null) {
+      Nearby().disconnectFromEndpoint(_connectedEndpointId!);
+    }
+    if (_compiledPayloadFile != null && _compiledPayloadFile!.existsSync()) {
+      try {
+        _compiledPayloadFile!.deleteSync();
+      } catch (_) {}
+    }
+    super.dispose();
+  }
+
+  // Requests hardware capabilities, downloads image, packs archive container
+  Future<void> _assemblePackageAndDiscover() async {
+    try {
+      final permissionsAllowed = await [
+        Permission.location,
+        Permission.bluetoothAdvertise,
+        Permission.bluetoothConnect,
+        Permission.bluetoothScan,
+        Permission.nearbyWifiDevices,
+      ].request();
+
+      if (!permissionsAllowed.values.every((status) => status.isGranted)) {
+        setState(() {
+          _preparingBundle = false;
+          _statusMessage =
+              'Sharing failed: Missing required hardware map permissions.';
+        });
+        return;
+      }
+
+      setState(
+          () => _statusMessage = 'Compiling encrypted validation manifest…');
+
+      final response = await http.get(Uri.parse(widget.stegoUrl));
+      if (response.statusCode != 200)
+        throw Exception('Remote asset fetch failed');
+
+      final imageBytes = response.bodyBytes;
+      final archive = Archive();
+
+      archive.addFile(
+        ArchiveFile(
+            'ticket_${widget.ticketId}.png', imageBytes.length, imageBytes),
+      );
+
+      final manifestText = '''
+==================================================
+              EVENTCHAIN TICKET MANIFEST          
+==================================================
+Ticket ID:  #${widget.ticketId}
+Event:      ${widget.eventName}
+Date:       ${widget.eventDate}
+Venue:      ${widget.venue}
+Owner:      ${widget.ownerName}
+Tier:       ${widget.ticketType.toUpperCase()}
+Price:      MK ${formatMwk(widget.price)}
+Block:      BLOCK #${widget.blockIndex}
+
+Generated securely via EventChain System.
+==================================================
+''';
+      final manifestBytes = utf8.encode(manifestText);
+      archive.addFile(
+        ArchiveFile('ticket_details.txt', manifestBytes.length, manifestBytes),
+      );
+
+      final zipBytes = ZipEncoder().encode(archive);
+      if (zipBytes == null) throw Exception('Archive assembly layout fault');
+
+      final tempDir = await getTemporaryDirectory();
+      _compiledPayloadFile =
+          File('${tempDir.path}/p2p_trans_${widget.ticketId}.zip');
+      await _compiledPayloadFile!.writeAsBytes(zipBytes);
+
+      setState(() {
+        _preparingBundle = false;
+        _statusMessage = 'Searching for active validation scanners…';
+      });
+
+      await Nearby().startDiscovery(
+        "Ticket_Sender_${Platform.localHostname}",
+        Strategy.P2P_STAR,
+        onEndpointFound: (id, name, serviceId) {
+          if (!mounted) return;
+          setState(() {
+            if (!_discoveredScanners.any((sc) => sc['id'] == id)) {
+              _discoveredScanners.add({'id': id, 'name': name});
+            }
+          });
+        },
+        onEndpointLost: (id) {
+          if (!mounted) return;
+          setState(() {
+            _discoveredScanners.removeWhere((sc) => sc['id'] == id);
+          });
+        },
+      );
+    } catch (e) {
+      setState(() {
+        _preparingBundle = false;
+        _statusMessage = 'Failed initialization layout sequence: $e';
+      });
+    }
+  }
+
+  // Handles active connection requests to tapped scanning terminals
+  Future<void> _dispatchConnectionRequest(String id, String name) async {
+    setState(() {
+      _statusMessage = 'Requesting local uplink channel to $name…';
+    });
+
+    try {
+      await Nearby().requestConnection(
+        "Ticket_Sender_${Platform.localHostname}",
+        id,
+        onConnectionInitiated: (endpointId, info) async {
+          await Nearby().acceptConnection(
+            endpointId,
+            onPayLoadRecieved:
+                (_, __) {}, // Handled strictly as outgoing channel
+            onPayloadTransferUpdate: (epId, update) {
+              if (!mounted) return;
+              switch (update.status) {
+                case PayloadStatus.IN_PROGRESS:
+                  setState(() {
+                    _isSending = true;
+                    _transmissionProgress =
+                        update.bytesTransferred / update.totalBytes;
+                    _statusMessage =
+                        'Streaming bundle payload: ${(_transmissionProgress * 100).toStringAsFixed(0)}%';
+                  });
+                  break;
+                case PayloadStatus.SUCCESS:
+                  setState(() {
+                    _isSending = false;
+                    _statusMessage = 'Payload delivered successfully!';
+                  });
+                  Future.delayed(const Duration(milliseconds: 1800), () {
+                    if (mounted) Navigator.pop(context);
+                  });
+                  break;
+                case PayloadStatus.FAILURE:
+                  setState(() {
+                    _isSending = false;
+                    _statusMessage =
+                        'Transmission stream dropped by host terminal.';
+                  });
+                  break;
+                case PayloadStatus.NONE:
+                  break;
+                case PayloadStatus.CANCELED:
+                  // TODO: Handle this case.
+                  throw UnimplementedError();
+              }
+            },
+          );
+        },
+        onConnectionResult: (endpointId, status) async {
+          if (status == Status.CONNECTED) {
+            setState(() {
+              _isConnected = true;
+              _connectedEndpointId = endpointId;
+              _statusMessage = 'Uplink locked. Executing pipeline stream…';
+            });
+
+            if (_compiledPayloadFile != null &&
+                _compiledPayloadFile!.existsSync()) {
+              await Nearby()
+                  .sendFilePayload(endpointId, _compiledPayloadFile!.path);
+            } else {
+              setState(
+                  () => _statusMessage = 'Payload container generation error.');
+            }
+          } else {
+            setState(() =>
+                _statusMessage = 'Uplink connection rejected by terminal.');
+          }
+        },
+        onDisconnected: (endpointId) {
+          if (!mounted) return;
+          setState(() {
+            _isConnected = false;
+            _isSending = false;
+            _connectedEndpointId = null;
+            _statusMessage = 'Disconnected. Searching for endpoints…';
+          });
+        },
+      );
+    } catch (e) {
+      setState(() =>
+          _statusMessage = 'Failed routing connection payload parameters: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        top: 24,
+        left: 24,
+        right: 24,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 32,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'NEARBY WIRELESS EMIT',
+                style: AppTheme.merri(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close,
+                    color: AppTheme.subTextColor, size: 20),
+                onPressed: () => Navigator.pop(context),
+              )
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _statusMessage,
+            style: AppTheme.sans(fontSize: 13, color: Colors.white70),
+          ),
+          const SizedBox(height: 20),
+          if (_preparingBundle || _isConnected || _isSending) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                child: LinearProgressIndicator(
+                  value: _isSending ? _transmissionProgress : null,
+                  color: widget.accentColor,
+                  backgroundColor: Colors.white10,
+                ),
+              ),
+            )
+          ] else ...[
+            Text(
+              'AVAILABLE SCANNERS',
+              style: AppTheme.sans(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.subTextColor),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              constraints: const BoxConstraints(maxHeight: 200),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E1E1E),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+              ),
+              child: _discoveredScanners.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          'Waiting for gate terminal to launch discovery server…',
+                          textAlign: TextAlign.center,
+                          style: AppTheme.sans(
+                              fontSize: 12, color: AppTheme.subTextColor),
+                        ),
+                      ),
+                    )
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: _discoveredScanners.length,
+                      separatorBuilder: (_, __) => Divider(
+                          color: Colors.white.withValues(alpha: 0.05),
+                          height: 1),
+                      itemBuilder: (context, idx) {
+                        final scanner = _discoveredScanners[idx];
+                        return ListTile(
+                          leading: Icon(Icons.pin_drop_rounded,
+                              color: widget.accentColor),
+                          title: Text(
+                            scanner['name'] ?? 'Unknown Hardware Gateway',
+                            style: AppTheme.sans(
+                                fontSize: 14, fontWeight: FontWeight.w600),
+                          ),
+                          trailing: const Icon(Icons.arrow_forward_ios_rounded,
+                              size: 14, color: Colors.white30),
+                          onTap: () => _dispatchConnectionRequest(
+                              scanner['id']!, scanner['name']!),
+                        );
+                      },
+                    ),
+            )
+          ]
+        ],
       ),
     );
   }
