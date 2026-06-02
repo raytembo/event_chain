@@ -14,6 +14,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/ffi_bridge/eventchain_ffi.dart';
 import '../../shared/theme/app_theme.dart';
+import '../auth/auth_provider.dart'; // Added to access logged-in scanner profile info
 import '../events/events_provider.dart';
 import 'verification_result_screen.dart';
 
@@ -110,6 +111,31 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     return statuses.values.every((status) => status.isGranted);
   }
 
+  // Helper method to dynamically isolate the active Scanner user name
+  String _getScannerIdentityName() {
+    try {
+      final currentUser = Supabase.instance.client.auth.currentUser;
+      final metaName = currentUser?.userMetadata?['full_name'] as String?;
+      if (metaName != null && metaName.trim().isNotEmpty) {
+        return metaName.trim();
+      }
+    } catch (_) {}
+
+    try {
+      final authUser = ref.read(authProvider).user;
+      if (authUser != null) {
+        final mapData = jsonDecode(jsonEncode(authUser));
+        if (mapData['fullName'] != null) return mapData['fullName'].toString();
+        if (mapData['displayName'] != null)
+          return mapData['displayName'].toString();
+        if (mapData['full_name'] != null)
+          return mapData['full_name'].toString();
+      }
+    } catch (_) {}
+
+    return "Gate Terminal";
+  }
+
   Future<void> _toggleNearbyReceiver() async {
     if (_isAdvertising) {
       await Nearby().stopAdvertising();
@@ -134,11 +160,15 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       _statusMessage = 'Initializing local P2P discovery server…';
     });
 
+    // Create a dynamic display string for the target discovery pipeline
+    final broadcastIdentity = "Scanner: ${_getScannerIdentityName()}";
+
     try {
       await Nearby().startAdvertising(
-        "Ticket_Receiver_${Platform.localHostname}",
+        broadcastIdentity,
         Strategy.P2P_STAR,
         onConnectionInitiated: (endpointId, connectionInfo) async {
+          // Displays the incoming custom sender name set up in WalletScreen
           _setStatus('Connecting to ${connectionInfo.endpointName}…');
           await Nearby().acceptConnection(
             endpointId,
@@ -222,7 +252,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
             _incomingFileUris.remove(update.id);
 
-            // ── FIX 1: Direct inspect file signatures (Magic Bytes) ──
+            // Direct inspect file signatures (Magic Bytes)
             final file = File(targetDestPath);
             bool isZipFile = false;
 
@@ -231,7 +261,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               final bytes = await raf.read(4);
               await raf.close();
 
-              // ZIP files always start with 'PK' hex markers (0x50, 0x4B)
               if (bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4B) {
                 isZipFile = true;
               }
@@ -370,8 +399,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     final tempDir = await getTemporaryDirectory();
     final ts = DateTime.now().millisecondsSinceEpoch;
 
-    // ── FIX 2: Safe Extension Extraction Strategy ──
-    String ext = 'png'; // Fallback default
+    String ext = 'png';
     final filename = sourcePath.split('/').last;
     final dotIdx = filename.lastIndexOf('.');
     if (dotIdx != -1 && dotIdx < filename.length - 1) {

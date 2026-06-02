@@ -23,6 +23,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../shared/theme/app_theme.dart';
 import '../../shared/utilities/currency_formatter.dart';
+import '../auth/auth_provider.dart'; // Import to access auth state info
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 
@@ -678,10 +679,10 @@ Generated securely via EventChain System.
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// P2P Transmitter Console Drawer
+// P2P Transmitter Console Drawer (Converted to ConsumerStatefulWidget)
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _NearbySendBottomSheet extends StatefulWidget {
+class _NearbySendBottomSheet extends ConsumerStatefulWidget {
   final String stegoUrl;
   final String ticketId;
   final String eventName;
@@ -707,10 +708,12 @@ class _NearbySendBottomSheet extends StatefulWidget {
   });
 
   @override
-  State<_NearbySendBottomSheet> createState() => _NearbySendBottomSheetState();
+  ConsumerState<_NearbySendBottomSheet> createState() =>
+      _NearbySendBottomSheetState();
 }
 
-class _NearbySendBottomSheetState extends State<_NearbySendBottomSheet> {
+class _NearbySendBottomSheetState
+    extends ConsumerState<_NearbySendBottomSheet> {
   final List<Map<String, String>> _discoveredScanners = [];
   String _statusMessage = 'Initializing local hardware link…';
   bool _preparingBundle = true;
@@ -738,6 +741,34 @@ class _NearbySendBottomSheetState extends State<_NearbySendBottomSheet> {
       } catch (_) {}
     }
     super.dispose();
+  }
+
+  // Helper strategy to extract the cleanest available user profile or display identity
+  String _getSenderIdentityName() {
+    try {
+      // 1. Try reading the full name from the active Supabase metadata session directly
+      final currentUser = Supabase.instance.client.auth.currentUser;
+      final metaName = currentUser?.userMetadata?['full_name'] as String?;
+      if (metaName != null && metaName.trim().isNotEmpty) {
+        return metaName.trim();
+      }
+    } catch (_) {}
+
+    try {
+      // 2. Fall back to reading the state row from Riverpod auth state dynamically
+      final authUser = ref.read(authProvider).user;
+      if (authUser != null) {
+        final mapData = jsonDecode(jsonEncode(authUser));
+        if (mapData['fullName'] != null) return mapData['fullName'].toString();
+        if (mapData['displayName'] != null)
+          return mapData['displayName'].toString();
+        if (mapData['full_name'] != null)
+          return mapData['full_name'].toString();
+      }
+    } catch (_) {}
+
+    // 3. Absolute safety layout fallback to ticket asset owner name string
+    return widget.ownerName;
   }
 
   // Requests hardware capabilities, downloads image, packs archive container
@@ -809,8 +840,11 @@ Generated securely via EventChain System.
         _statusMessage = 'Searching for active validation scanners…';
       });
 
+      // Fetch sender identity to display on receiver's terminal console interface
+      final identityString = "Sender: ${_getSenderIdentityName()}";
+
       await Nearby().startDiscovery(
-        "Ticket_Sender_${Platform.localHostname}",
+        identityString,
         Strategy.P2P_STAR,
         onEndpointFound: (id, name, serviceId) {
           if (!mounted) return;
@@ -837,13 +871,15 @@ Generated securely via EventChain System.
 
   // Handles active connection requests to tapped scanning terminals
   Future<void> _dispatchConnectionRequest(String id, String name) async {
+    final identityString = "Sender: ${_getSenderIdentityName()}";
+
     setState(() {
       _statusMessage = 'Requesting local uplink channel to $name…';
     });
 
     try {
       await Nearby().requestConnection(
-        "Ticket_Sender_${Platform.localHostname}",
+        identityString,
         id,
         onConnectionInitiated: (endpointId, info) async {
           await Nearby().acceptConnection(
@@ -881,8 +917,11 @@ Generated securely via EventChain System.
                 case PayloadStatus.NONE:
                   break;
                 case PayloadStatus.CANCELED:
-                  // TODO: Handle this case.
-                  throw UnimplementedError();
+                  setState(() {
+                    _isSending = false;
+                    _statusMessage = 'Transmission canceled.';
+                  });
+                  break;
               }
             },
           );

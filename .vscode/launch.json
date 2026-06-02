@@ -1,0 +1,26 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Android Emulator 1",
+            "request": "launch",
+            "type": "dart",
+            "deviceId": "emulator-5554"
+        },
+        {
+            "name": "Android Emulator 2",
+            "request": "launch",
+            "type": "dart",
+            "deviceId": "emulator-5556"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Both Android Emulators",
+            "configurations": [
+                "Android Emulator 1",
+                "Android Emulator 2"
+            ]
+        }
+    ]
+}
