@@ -1,7 +1,7 @@
 // lib/features/scanner/verification_result_screen.dart
 //
-// Optimized rewrite: null-safe ticket resolution, better error states,
-//                    consistent styling, const constructors where possible.
+// Optimized rewrite: Simplified consumer-friendly UI language, null-safe
+//                    ticket resolution, and clear validation status labels.
 
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -34,7 +34,7 @@ class VerificationResultScreen extends StatelessWidget {
 
     final Color color =
         authentic ? AppTheme.authenticColor : AppTheme.tamperedColor;
-    final String label = authentic ? 'AUTHENTIC' : 'TAMPERED';
+    final String label = authentic ? 'VALID TICKET' : 'INVALID TICKET';
     final IconData icon = authentic ? Icons.verified : Icons.gpp_bad;
 
     return Scaffold(
@@ -58,10 +58,10 @@ class VerificationResultScreen extends StatelessWidget {
                 const _SectionHeader('Ticket Details'),
                 _TicketDetailCard(ticket: ticket),
               ] else if (supabaseTicketData != null) ...[
-                const _SectionHeader('Database Record'),
+                const _SectionHeader('System Record'),
                 _RawDataCard(data: supabaseTicketData!),
               ] else ...[
-                const _SectionHeader('Details'),
+                const _SectionHeader('Information'),
                 _EmptyState(authentic: authentic),
               ],
               const SizedBox(height: 40),
@@ -95,7 +95,6 @@ class VerificationResultScreen extends StatelessWidget {
   }
 
   TicketModel? _resolveTicket() {
-    // ── Priority 1: live FFI lookup against the local blockchain ────────────
     if (eventName != null && blockIndex != null) {
       try {
         return EventChainFFI.instance.getTicket(eventName!, blockIndex!);
@@ -104,21 +103,6 @@ class VerificationResultScreen extends StatelessWidget {
       }
     }
 
-    // ── Priority 2: Supabase row (from v_ticket_detail via scanner) ──────────
-    //
-    // FIX (Bug 3): The raw Supabase row uses snake_case keys
-    // (ticket_id, owner_name, block_index, event_name, …) because it comes
-    // straight from PostgREST. The old code called TicketModel.fromJson()
-    // which looks for camelCase keys (ticketID, ownerName, …) — every field
-    // silently resolved to '' / 0.0, producing a completely blank ticket card.
-    //
-    // The correct approach is TicketRecord.fromMap() (which was written for
-    // exactly this snake_case shape) followed by toFFIModel() to produce a
-    // TicketModel the rest of the UI can display uniformly.
-    //
-    // If fromMap() throws (e.g. a required field is absent or the schema
-    // changed), we fall back to TicketModel.fromJson() as a best-effort so
-    // at least partial data can appear, then _RawDataCard as a last resort.
     if (supabaseTicketData != null) {
       try {
         return TicketRecord.fromMap(supabaseTicketData!).toFFIModel();
@@ -232,10 +216,10 @@ class _TicketDetailCard extends StatelessWidget {
       ('Event', ticket.eventName),
       ('Date', ticket.eventDate),
       ('Venue', ticket.venue),
-      ('Owner', ticket.ownerName),
-      ('Owner ID', ticket.ownerID),
-      ('Type', ticket.ticketType),
-      ('Price', 'MWK${ticket.price.toStringAsFixed(2)}'),
+      ('Ticket Holder', ticket.ownerName),
+      ('Holder ID', ticket.ownerID),
+      ('Tier Type', ticket.ticketType),
+      ('Price', 'MWK ${ticket.price.toStringAsFixed(2)}'),
     ];
 
     return Container(
@@ -298,8 +282,8 @@ class _EmptyState extends StatelessWidget {
       ),
       child: Text(
         authentic
-            ? 'Ticket verified, but details could not be loaded.'
-            : 'No matching ticket found in any loaded event chain.',
+            ? 'The ticket is valid, but its individual data records could not be read.'
+            : 'This ticket could not be found or verified in our system listings.',
         textAlign: TextAlign.center,
         style: AppTheme.sans(fontSize: 14, color: AppTheme.subTextColor),
       ),

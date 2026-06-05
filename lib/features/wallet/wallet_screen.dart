@@ -1,11 +1,7 @@
 // lib/features/wallet/wallet_screen.dart
 //
-// Shows purchased tickets with:
-//   • Stego ticket image (loaded from stego_url in the tickets table)
-//   • Download to gallery (via gal library)
-//   • Share via system share sheet (Image & ZIP formats)
-//   • Event details joined from events table
-//   • P2P Direct Sending to local Verification Terminals via Nearby Connections
+// Optimized rewrite: Simplified consumer-friendly UI language, null-safe
+//                    ticket resolution, and clean user experience copy.
 
 import 'dart:convert';
 import 'dart:io';
@@ -23,7 +19,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../shared/theme/app_theme.dart';
 import '../../shared/utilities/currency_formatter.dart';
-import '../auth/auth_provider.dart'; // Import to access auth state info
+import '../auth/auth_provider.dart';
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 
@@ -94,7 +90,7 @@ class WalletScreen extends ConsumerWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Wallet Card — StatefulWidget to manage download state
+// Wallet Card
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _WalletCard extends StatefulWidget {
@@ -120,21 +116,24 @@ class _WalletCardState extends State<_WalletCard> {
     }
   }
 
-  static String _month(int m) => const [
-        '',
-        'Jan',
-        'Feb',
-        'Mar',
-        'Apr',
-        'May',
-        'Jun',
-        'Jul',
-        'Aug',
-        'Sep',
-        'Oct',
-        'Nov',
-        'Dec',
-      ][m];
+  static String _month(int m) {
+    if (m < 1 || m > 12) return '';
+    return const [
+      '',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ][m];
+  }
 
   Color _typeColor(String type) {
     switch (type.toLowerCase()) {
@@ -149,7 +148,7 @@ class _WalletCardState extends State<_WalletCard> {
     }
   }
 
-  // ── Download to gallery via gal ────────────────────────────────────────────
+  // ── Download to gallery ────────────────────────────────────────────────────
 
   Future<void> _downloadTicket({
     required String stegoUrl,
@@ -189,7 +188,7 @@ class _WalletCardState extends State<_WalletCard> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Saved to gallery', style: AppTheme.sans()),
+        content: Text('Saved to your device gallery', style: AppTheme.sans()),
         backgroundColor: AppTheme.authenticColor,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 3),
@@ -204,15 +203,16 @@ class _WalletCardState extends State<_WalletCard> {
             await shareFile.writeAsBytes(shareResponse.bodyBytes);
             await Share.shareXFiles(
               [XFile(shareFile.path)],
-              subject: 'My EventChain Ticket',
+              subject: 'My Event Ticket',
             );
           },
         ),
       ));
     } catch (e) {
+      debugPrint('Gallery save error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Download failed: $e', style: AppTheme.sans()),
+        content: Text('Could not save image', style: AppTheme.sans()),
         backgroundColor: AppTheme.tamperedColor,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 4),
@@ -240,7 +240,7 @@ class _WalletCardState extends State<_WalletCard> {
       await Share.shareXFiles(
         [XFile(file.path)],
         subject: 'My ticket for $eventName',
-        text: 'My EventChain ticket for $eventName',
+        text: 'My ticket for $eventName',
       );
     } catch (e) {
       if (!mounted) return;
@@ -272,7 +272,7 @@ class _WalletCardState extends State<_WalletCard> {
     try {
       final response = await http.get(Uri.parse(stegoUrl));
       if (response.statusCode != 200) {
-        throw Exception('Could not fetch image asset');
+        throw Exception('Could not fetch ticket details');
       }
 
       final imageBytes = response.bodyBytes;
@@ -284,18 +284,18 @@ class _WalletCardState extends State<_WalletCard> {
 
       final manifestText = '''
 ==================================================
-              EVENTCHAIN TICKET MANIFEST          
+              TICKET VERIFICATION RECORD          
 ==================================================
-Ticket ID:  #$ticketId
-Event:      $eventName
-Date:       $eventDate
-Venue:      $venue
-Owner:      $ownerName
-Tier:       ${ticketType.toUpperCase()}
-Price:      MK ${formatMwk(price)}
-Block:      BLOCK #$blockIndex
+Ticket ID:    #$ticketId
+Event Name:   $eventName
+Event Date:   $eventDate
+Venue:        $venue
+Holder:       $ownerName
+Ticket Type:  ${ticketType.toUpperCase()}
+Price:        MK ${formatMwk(price)}
+Entry Block:  BLOCK #$blockIndex
 
-Generated securely via EventChain System.
+Verified Digital Ticket Record.
 ==================================================
 ''';
       final manifestBytes = utf8.encode(manifestText);
@@ -303,10 +303,10 @@ Generated securely via EventChain System.
         ArchiveFile('ticket_details.txt', manifestBytes.length, manifestBytes),
       );
 
-      final zipEncoder = ZipEncoder();
-      final zipBytes = zipEncoder.encode(archive);
-      if (zipBytes == null)
-        throw Exception('Failed to generate archive structure');
+      final zipBytes = ZipEncoder().encode(archive);
+      if (zipBytes == null) {
+        throw Exception('Failed to bundle files');
+      }
 
       final tempDir = await getTemporaryDirectory();
       final zipFile = File('${tempDir.path}/ticket_$ticketId.zip');
@@ -314,14 +314,14 @@ Generated securely via EventChain System.
 
       await Share.shareXFiles(
         [XFile(zipFile.path, mimeType: 'application/zip')],
-        subject: 'EventChain Archive - $eventName',
+        subject: 'Ticket Details - $eventName',
         text:
-            'Compressed asset packet containing secure ticket verification items.',
+            'Digital ticket pass containing entry image and description files.',
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('ZIP bundle build failed: $e', style: AppTheme.sans()),
+        content: Text('Could not create folder: $e', style: AppTheme.sans()),
         backgroundColor: AppTheme.tamperedColor,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 3),
@@ -331,7 +331,6 @@ Generated securely via EventChain System.
     }
   }
 
-  // Opens the P2P Sending Platform Interface
   void _openNearbyTransmissionSheet({
     required String stegoUrl,
     required String ticketId,
@@ -368,7 +367,12 @@ Generated securely via EventChain System.
 
   @override
   Widget build(BuildContext context) {
-    final ticket = widget.payment['tickets'] as Map<String, dynamic>? ?? {};
+    final rawTickets = widget.payment['tickets'];
+    final Map<String, dynamic> ticket =
+        (rawTickets is List && rawTickets.isNotEmpty)
+            ? rawTickets.first as Map<String, dynamic>
+            : (rawTickets is Map<String, dynamic> ? rawTickets : {});
+
     final eventData = ticket['event'] as Map<String, dynamic>? ?? {};
 
     final ticketType = ticket['ticket_type'] as String? ?? 'general';
@@ -389,10 +393,7 @@ Generated securely via EventChain System.
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            typeColor.withValues(alpha: 0.22),
-            AppTheme.cardColor,
-          ],
+          colors: [typeColor.withValues(alpha: 0.22), AppTheme.cardColor],
         ),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: typeColor.withValues(alpha: 0.5)),
@@ -400,216 +401,74 @@ Generated securely via EventChain System.
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildTicketImage(stegoUrl, typeColor),
+          _TicketImage(stegoUrl: stegoUrl, typeColor: typeColor),
           Padding(
             padding: const EdgeInsets.all(20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: typeColor.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(6),
-                        border:
-                            Border.all(color: typeColor.withValues(alpha: 0.4)),
-                      ),
-                      child: Text(
-                        ticketType.toUpperCase(),
-                        style: AppTheme.sans(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1,
-                          color: typeColor,
-                        ),
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      '#$ticketId',
-                      style: AppTheme.sans(
-                          fontSize: 12, color: AppTheme.subTextColor),
-                    ),
-                  ],
-                ),
+                _TicketHeaderTier(
+                    ticketType: ticketType,
+                    ticketId: ticketId,
+                    typeColor: typeColor),
                 const SizedBox(height: 16),
-                Row(
-                  children: List.generate(
-                    32,
-                    (_) => Expanded(
-                      child: Container(
-                        height: 1.5,
-                        color: Colors.white.withValues(alpha: 0.15),
-                        margin: const EdgeInsets.symmetric(horizontal: 1.5),
-                      ),
-                    ),
-                  ),
-                ),
+                _TicketDashedDivider(),
                 const SizedBox(height: 16),
-                Text(
-                  eventName,
-                  style:
-                      AppTheme.merri(fontSize: 19, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    const Icon(Icons.calendar_today,
-                        size: 15, color: AppTheme.subTextColor),
-                    const SizedBox(width: 6),
-                    Text(eventDate,
-                        style:
-                            AppTheme.sans(fontSize: 13, color: Colors.white70)),
-                    const SizedBox(width: 16),
-                    const Icon(Icons.location_on_outlined,
-                        size: 15, color: AppTheme.subTextColor),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        venue,
-                        style:
-                            AppTheme.sans(fontSize: 13, color: Colors.white70),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    const Icon(Icons.person_outline,
-                        size: 15, color: AppTheme.subTextColor),
-                    const SizedBox(width: 6),
-                    Text(
-                      ownerName,
-                      style: AppTheme.sans(
-                          fontSize: 13, color: AppTheme.subTextColor),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      'MK ${formatMwk(price)}',
-                      style: AppTheme.sans(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                        color: typeColor,
-                      ),
-                    ),
-                    Text(
-                      'BLOCK #$blockIndex',
-                      style: AppTheme.sans(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.subTextColor,
-                      ),
-                    ),
-                  ],
+                _TicketEventDetails(
+                  eventName: eventName,
+                  eventDate: eventDate,
+                  venue: venue,
+                  ownerName: ownerName,
+                  price: price,
+                  blockIndex: blockIndex,
+                  typeColor: typeColor,
                 ),
                 const SizedBox(height: 16),
                 Divider(color: Colors.white.withValues(alpha: 0.08)),
                 const SizedBox(height: 12),
-                if (stegoUrl != null)
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // High-priority ecosystem feature: Wireless delivery pipeline
-                      SizedBox(
-                        width: double.infinity,
-                        child: _ActionButton(
-                          icon: Icons.wifi_tethering_rounded,
-                          label: 'SEND VIA NEARBY SHARE',
-                          color: typeColor,
-                          onTap: () => _openNearbyTransmissionSheet(
-                            stegoUrl: stegoUrl,
-                            ticketId: ticketId,
-                            eventName: eventName,
-                            eventDate: eventDate,
-                            venue: venue,
-                            ownerName: ownerName,
-                            ticketType: ticketType,
-                            price: price,
-                            blockIndex: blockIndex,
-                            accentColor: typeColor,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _ActionButton(
-                              icon: _isDownloading
-                                  ? null
-                                  : Icons.download_rounded,
-                              label: _isDownloading ? 'Saving…' : 'Download',
-                              color: typeColor,
-                              outlined: true,
-                              loading: _isDownloading,
-                              onTap: _isDownloading
-                                  ? null
-                                  : () => _downloadTicket(
-                                        stegoUrl: stegoUrl,
-                                        ticketId: ticketId,
-                                      ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _ActionButton(
-                              icon: Icons.share_rounded,
-                              label: 'Share Image',
-                              color: typeColor,
-                              outlined: true,
-                              onTap: () => _shareTicket(
-                                stegoUrl: stegoUrl,
-                                ticketId: ticketId,
-                                eventName: eventName,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: _ActionButton(
-                          icon: _isZipping ? null : Icons.folder_zip_outlined,
-                          label:
-                              _isZipping ? 'Archiving…' : 'Share ZIP Archive',
-                          color: typeColor,
-                          outlined: true,
-                          loading: _isZipping,
-                          onTap: _isZipping
-                              ? null
-                              : () => _shareTicketZip(
-                                    stegoUrl: stegoUrl,
-                                    ticketId: ticketId,
-                                    eventName: eventName,
-                                    eventDate: eventDate,
-                                    venue: venue,
-                                    ownerName: ownerName,
-                                    ticketType: ticketType,
-                                    price: price,
-                                    blockIndex: blockIndex,
-                                  ),
-                        ),
-                      ),
-                    ],
-                  )
-                else
-                  Text(
-                    'Ticket image not available',
-                    style: AppTheme.sans(
-                        fontSize: 12, color: AppTheme.subTextColor),
+                _TicketActionPipeline(
+                  stegoUrl: stegoUrl,
+                  ticketId: ticketId,
+                  eventName: eventName,
+                  eventDate: eventDate,
+                  venue: venue,
+                  ownerName: ownerName,
+                  ticketType: ticketType,
+                  price: price,
+                  blockIndex: blockIndex,
+                  typeColor: typeColor,
+                  isDownloading: _isDownloading,
+                  isZipping: _isZipping,
+                  onDownload: () =>
+                      _downloadTicket(stegoUrl: stegoUrl!, ticketId: ticketId),
+                  onShareImage: () => _shareTicket(
+                      stegoUrl: stegoUrl!,
+                      ticketId: ticketId,
+                      eventName: eventName),
+                  onShareZip: () => _shareTicketZip(
+                    stegoUrl: stegoUrl!,
+                    ticketId: ticketId,
+                    eventName: eventName,
+                    eventDate: eventDate,
+                    venue: venue,
+                    ownerName: ownerName,
+                    ticketType: ticketType,
+                    price: price,
+                    blockIndex: blockIndex,
                   ),
+                  onNearbyShare: () => _openNearbyTransmissionSheet(
+                    stegoUrl: stegoUrl!,
+                    ticketId: ticketId,
+                    eventName: eventName,
+                    eventDate: eventDate,
+                    venue: venue,
+                    ownerName: ownerName,
+                    ticketType: ticketType,
+                    price: price,
+                    blockIndex: blockIndex,
+                    accentColor: typeColor,
+                  ),
+                ),
               ],
             ),
           ),
@@ -617,16 +476,45 @@ Generated securely via EventChain System.
       ),
     );
   }
+}
 
-  Widget _buildTicketImage(String? stegoUrl, Color typeColor) {
-    if (stegoUrl == null || stegoUrl.isEmpty) {
-      return _imagePlaceholder(typeColor);
+// ── Sub-widgets ───────────────────────────────────────────────────────────────
+
+class _TicketImage extends StatelessWidget {
+  final String? stegoUrl;
+  final Color typeColor;
+
+  const _TicketImage({required this.stegoUrl, required this.typeColor});
+
+  @override
+  Widget build(BuildContext context) {
+    if (stegoUrl == null || stegoUrl!.isEmpty) {
+      return ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        child: Container(
+          height: 120,
+          color: const Color(0xFF1C1C1C),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.image_not_supported_outlined,
+                    color: typeColor.withValues(alpha: 0.3), size: 36),
+                const SizedBox(height: 8),
+                Text('Image not available',
+                    style: AppTheme.sans(
+                        fontSize: 12, color: AppTheme.subTextColor)),
+              ],
+            ),
+          ),
+        ),
+      );
     }
 
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       child: Image.network(
-        stegoUrl,
+        stegoUrl!,
         height: 200,
         width: double.infinity,
         fit: BoxFit.cover,
@@ -647,30 +535,12 @@ Generated securely via EventChain System.
             ),
           );
         },
-        errorBuilder: (_, __, ___) => _imagePlaceholder(typeColor),
-      ),
-    );
-  }
-
-  Widget _imagePlaceholder(Color typeColor) {
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-      child: Container(
-        height: 120,
-        color: const Color(0xFF1C1C1C),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.image_not_supported_outlined,
-                  color: typeColor.withValues(alpha: 0.3), size: 36),
-              const SizedBox(height: 8),
-              Text(
-                'No image available',
-                style:
-                    AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor),
-              ),
-            ],
+        errorBuilder: (_, __, ___) => Container(
+          height: 120,
+          color: const Color(0xFF1C1C1C),
+          child: Center(
+            child: Icon(Icons.image_not_supported_outlined,
+                color: typeColor.withValues(alpha: 0.3), size: 36),
           ),
         ),
       ),
@@ -678,8 +548,238 @@ Generated securely via EventChain System.
   }
 }
 
+class _TicketHeaderTier extends StatelessWidget {
+  final String ticketType;
+  final String ticketId;
+  final Color typeColor;
+
+  const _TicketHeaderTier(
+      {required this.ticketType,
+      required this.ticketId,
+      required this.typeColor});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          decoration: BoxDecoration(
+            color: typeColor.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: typeColor.withValues(alpha: 0.4)),
+          ),
+          child: Text(
+            ticketType.toUpperCase(),
+            style: AppTheme.sans(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1,
+                color: typeColor),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TicketDashedDivider extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: List.generate(
+        32,
+        (_) => Expanded(
+          child: Container(
+            height: 1.5,
+            color: Colors.white.withValues(alpha: 0.15),
+            margin: const EdgeInsets.symmetric(horizontal: 1.5),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TicketEventDetails extends StatelessWidget {
+  final String eventName;
+  final String eventDate;
+  final String venue;
+  final String ownerName;
+  final double price;
+  final int blockIndex;
+  final Color typeColor;
+
+  const _TicketEventDetails({
+    required this.eventName,
+    required this.eventDate,
+    required this.venue,
+    required this.ownerName,
+    required this.price,
+    required this.blockIndex,
+    required this.typeColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(eventName,
+            style: AppTheme.merri(fontSize: 19, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Icon(Icons.calendar_today,
+                size: 15, color: AppTheme.subTextColor),
+            const SizedBox(width: 6),
+            Text(eventDate,
+                style: AppTheme.sans(fontSize: 13, color: Colors.white70)),
+            const SizedBox(width: 16),
+            const Icon(Icons.location_on_outlined,
+                size: 15, color: AppTheme.subTextColor),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(venue,
+                  style: AppTheme.sans(fontSize: 13, color: Colors.white70),
+                  overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            const Icon(Icons.person_outline,
+                size: 15, color: AppTheme.subTextColor),
+            const SizedBox(width: 6),
+            Text(ownerName,
+                style:
+                    AppTheme.sans(fontSize: 13, color: AppTheme.subTextColor)),
+          ],
+        ),
+        const SizedBox(height: 20),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text('MK ${formatMwk(price)}',
+                style: AppTheme.sans(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    color: typeColor)),
+            //block == ticket
+            Text('Ticket #$blockIndex',
+                style: AppTheme.sans(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.subTextColor)),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _TicketActionPipeline extends StatelessWidget {
+  final String? stegoUrl;
+  final String ticketId;
+  final String eventName;
+  final String eventDate;
+  final String venue;
+  final String ownerName;
+  final String ticketType;
+  final double price;
+  final int blockIndex;
+  final Color typeColor;
+  final bool isDownloading;
+  final bool isZipping;
+  final VoidCallback onDownload;
+  final VoidCallback onShareImage;
+  final VoidCallback onShareZip;
+  final VoidCallback onNearbyShare;
+
+  const _TicketActionPipeline({
+    required this.stegoUrl,
+    required this.ticketId,
+    required this.eventName,
+    required this.eventDate,
+    required this.venue,
+    required this.ownerName,
+    required this.ticketType,
+    required this.price,
+    required this.blockIndex,
+    required this.typeColor,
+    required this.isDownloading,
+    required this.isZipping,
+    required this.onDownload,
+    required this.onShareImage,
+    required this.onShareZip,
+    required this.onNearbyShare,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (stegoUrl == null) {
+      return Text('Ticket image not available',
+          style: AppTheme.sans(fontSize: 12, color: AppTheme.subTextColor));
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: _ActionButton(
+            icon: Icons.wifi_tethering_rounded,
+            label: 'SEND TO SCANNER',
+            color: typeColor,
+            onTap: onNearbyShare,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _ActionButton(
+                icon: isDownloading ? null : Icons.download_rounded,
+                label: isDownloading ? 'Saving…' : 'Download',
+                color: typeColor,
+                outlined: true,
+                loading: isDownloading,
+                onTap: isDownloading ? null : onDownload,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _ActionButton(
+                icon: Icons.share_rounded,
+                label: 'Share Image',
+                color: typeColor,
+                outlined: true,
+                onTap: onShareImage,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: _ActionButton(
+            icon: isZipping ? null : Icons.folder_zip_outlined,
+            label: isZipping ? 'Archiving…' : 'Share Ticket Details',
+            color: typeColor,
+            outlined: true,
+            loading: isZipping,
+            onTap: isZipping ? null : onShareZip,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// P2P Transmitter Console Drawer (Converted to ConsumerStatefulWidget)
+// Wireless Send Bottom Sheet
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _NearbySendBottomSheet extends ConsumerStatefulWidget {
@@ -715,7 +815,7 @@ class _NearbySendBottomSheet extends ConsumerStatefulWidget {
 class _NearbySendBottomSheetState
     extends ConsumerState<_NearbySendBottomSheet> {
   final List<Map<String, String>> _discoveredScanners = [];
-  String _statusMessage = 'Initializing local hardware link…';
+  String _statusMessage = 'Setting up wireless link…';
   bool _preparingBundle = true;
   bool _isConnected = false;
   bool _isSending = false;
@@ -743,10 +843,8 @@ class _NearbySendBottomSheetState
     super.dispose();
   }
 
-  // Helper strategy to extract the cleanest available user profile or display identity
   String _getSenderIdentityName() {
     try {
-      // 1. Try reading the full name from the active Supabase metadata session directly
       final currentUser = Supabase.instance.client.auth.currentUser;
       final metaName = currentUser?.userMetadata?['full_name'] as String?;
       if (metaName != null && metaName.trim().isNotEmpty) {
@@ -755,23 +853,22 @@ class _NearbySendBottomSheetState
     } catch (_) {}
 
     try {
-      // 2. Fall back to reading the state row from Riverpod auth state dynamically
       final authUser = ref.read(authProvider).user;
       if (authUser != null) {
         final mapData = jsonDecode(jsonEncode(authUser));
         if (mapData['fullName'] != null) return mapData['fullName'].toString();
-        if (mapData['displayName'] != null)
+        if (mapData['displayName'] != null) {
           return mapData['displayName'].toString();
-        if (mapData['full_name'] != null)
+        }
+        if (mapData['full_name'] != null) {
           return mapData['full_name'].toString();
+        }
       }
     } catch (_) {}
 
-    // 3. Absolute safety layout fallback to ticket asset owner name string
     return widget.ownerName;
   }
 
-  // Requests hardware capabilities, downloads image, packs archive container
   Future<void> _assemblePackageAndDiscover() async {
     try {
       final permissionsAllowed = await [
@@ -786,17 +883,17 @@ class _NearbySendBottomSheetState
         setState(() {
           _preparingBundle = false;
           _statusMessage =
-              'Sharing failed: Missing required hardware map permissions.';
+              'Could not connect: Please enable nearby device permissions.';
         });
         return;
       }
 
-      setState(
-          () => _statusMessage = 'Compiling encrypted validation manifest…');
+      setState(() => _statusMessage = 'Preparing secure ticket details…');
 
       final response = await http.get(Uri.parse(widget.stegoUrl));
-      if (response.statusCode != 200)
-        throw Exception('Remote asset fetch failed');
+      if (response.statusCode != 200) {
+        throw Exception('Failed to load online assets');
+      }
 
       final imageBytes = response.bodyBytes;
       final archive = Archive();
@@ -808,18 +905,18 @@ class _NearbySendBottomSheetState
 
       final manifestText = '''
 ==================================================
-              EVENTCHAIN TICKET MANIFEST          
+              TICKET VERIFICATION RECORD          
 ==================================================
-Ticket ID:  #${widget.ticketId}
-Event:      ${widget.eventName}
-Date:       ${widget.eventDate}
-Venue:      ${widget.venue}
-Owner:      ${widget.ownerName}
-Tier:       ${widget.ticketType.toUpperCase()}
-Price:      MK ${formatMwk(widget.price)}
-Block:      BLOCK #${widget.blockIndex}
+Ticket ID:    #${widget.ticketId}
+Event Name:   ${widget.eventName}
+Event Date:   ${widget.eventDate}
+Venue:        ${widget.venue}
+Holder:       ${widget.ownerName}
+Ticket Type:  ${widget.ticketType.toUpperCase()}
+Price:        MK ${formatMwk(widget.price)}
+Entry Block:  BLOCK #${widget.blockIndex}
 
-Generated securely via EventChain System.
+Verified Digital Ticket Record.
 ==================================================
 ''';
       final manifestBytes = utf8.encode(manifestText);
@@ -828,7 +925,6 @@ Generated securely via EventChain System.
       );
 
       final zipBytes = ZipEncoder().encode(archive);
-      if (zipBytes == null) throw Exception('Archive assembly layout fault');
 
       final tempDir = await getTemporaryDirectory();
       _compiledPayloadFile =
@@ -837,10 +933,9 @@ Generated securely via EventChain System.
 
       setState(() {
         _preparingBundle = false;
-        _statusMessage = 'Searching for active validation scanners…';
+        _statusMessage = 'Looking for nearby ticket scanners…';
       });
 
-      // Fetch sender identity to display on receiver's terminal console interface
       final identityString = "Sender: ${_getSenderIdentityName()}";
 
       await Nearby().startDiscovery(
@@ -864,17 +959,16 @@ Generated securely via EventChain System.
     } catch (e) {
       setState(() {
         _preparingBundle = false;
-        _statusMessage = 'Failed initialization layout sequence: $e';
+        _statusMessage = 'Connection error: $e';
       });
     }
   }
 
-  // Handles active connection requests to tapped scanning terminals
   Future<void> _dispatchConnectionRequest(String id, String name) async {
     final identityString = "Sender: ${_getSenderIdentityName()}";
 
     setState(() {
-      _statusMessage = 'Requesting local uplink channel to $name…';
+      _statusMessage = 'Connecting to $name…';
     });
 
     try {
@@ -884,8 +978,7 @@ Generated securely via EventChain System.
         onConnectionInitiated: (endpointId, info) async {
           await Nearby().acceptConnection(
             endpointId,
-            onPayLoadRecieved:
-                (_, __) {}, // Handled strictly as outgoing channel
+            onPayLoadRecieved: (_, __) {},
             onPayloadTransferUpdate: (epId, update) {
               if (!mounted) return;
               switch (update.status) {
@@ -895,13 +988,13 @@ Generated securely via EventChain System.
                     _transmissionProgress =
                         update.bytesTransferred / update.totalBytes;
                     _statusMessage =
-                        'Streaming bundle payload: ${(_transmissionProgress * 100).toStringAsFixed(0)}%';
+                        'Sending ticket data: ${(_transmissionProgress * 100).toStringAsFixed(0)}%';
                   });
                   break;
                 case PayloadStatus.SUCCESS:
                   setState(() {
                     _isSending = false;
-                    _statusMessage = 'Payload delivered successfully!';
+                    _statusMessage = 'Ticket sent successfully!';
                   });
                   Future.delayed(const Duration(milliseconds: 1800), () {
                     if (mounted) Navigator.pop(context);
@@ -910,8 +1003,7 @@ Generated securely via EventChain System.
                 case PayloadStatus.FAILURE:
                   setState(() {
                     _isSending = false;
-                    _statusMessage =
-                        'Transmission stream dropped by host terminal.';
+                    _statusMessage = 'Connection closed by the scanner.';
                   });
                   break;
                 case PayloadStatus.NONE:
@@ -919,7 +1011,7 @@ Generated securely via EventChain System.
                 case PayloadStatus.CANCELED:
                   setState(() {
                     _isSending = false;
-                    _statusMessage = 'Transmission canceled.';
+                    _statusMessage = 'Transfer canceled.';
                   });
                   break;
               }
@@ -931,7 +1023,7 @@ Generated securely via EventChain System.
             setState(() {
               _isConnected = true;
               _connectedEndpointId = endpointId;
-              _statusMessage = 'Uplink locked. Executing pipeline stream…';
+              _statusMessage = 'Connected. Sending ticket…';
             });
 
             if (_compiledPayloadFile != null &&
@@ -939,12 +1031,11 @@ Generated securely via EventChain System.
               await Nearby()
                   .sendFilePayload(endpointId, _compiledPayloadFile!.path);
             } else {
-              setState(
-                  () => _statusMessage = 'Payload container generation error.');
+              setState(() => _statusMessage = 'Failed to load ticket data.');
             }
           } else {
-            setState(() =>
-                _statusMessage = 'Uplink connection rejected by terminal.');
+            setState(
+                () => _statusMessage = 'Connection declined by the scanner.');
           }
         },
         onDisconnected: (endpointId) {
@@ -953,13 +1044,12 @@ Generated securely via EventChain System.
             _isConnected = false;
             _isSending = false;
             _connectedEndpointId = null;
-            _statusMessage = 'Disconnected. Searching for endpoints…';
+            _statusMessage = 'Disconnected. Looking for scanners…';
           });
         },
       );
     } catch (e) {
-      setState(() =>
-          _statusMessage = 'Failed routing connection payload parameters: $e');
+      setState(() => _statusMessage = 'Connection error: $e');
     }
   }
 
@@ -980,7 +1070,7 @@ Generated securely via EventChain System.
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'NEARBY WIRELESS EMIT',
+                'SEND TICKET WIRELESSLY',
                 style: AppTheme.merri(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
@@ -994,10 +1084,8 @@ Generated securely via EventChain System.
             ],
           ),
           const SizedBox(height: 12),
-          Text(
-            _statusMessage,
-            style: AppTheme.sans(fontSize: 13, color: Colors.white70),
-          ),
+          Text(_statusMessage,
+              style: AppTheme.sans(fontSize: 13, color: Colors.white70)),
           const SizedBox(height: 20),
           if (_preparingBundle || _isConnected || _isSending) ...[
             Padding(
@@ -1012,7 +1100,7 @@ Generated securely via EventChain System.
             )
           ] else ...[
             Text(
-              'AVAILABLE SCANNERS',
+              'NEARBY TICKET SCANNERS',
               style: AppTheme.sans(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
@@ -1031,7 +1119,7 @@ Generated securely via EventChain System.
                       child: Padding(
                         padding: const EdgeInsets.all(24),
                         child: Text(
-                          'Waiting for gate terminal to launch discovery server…',
+                          'Waiting for a ticket scanner to appear…',
                           textAlign: TextAlign.center,
                           style: AppTheme.sans(
                               fontSize: 12, color: AppTheme.subTextColor),
@@ -1050,7 +1138,7 @@ Generated securely via EventChain System.
                           leading: Icon(Icons.pin_drop_rounded,
                               color: widget.accentColor),
                           title: Text(
-                            scanner['name'] ?? 'Unknown Hardware Gateway',
+                            scanner['name'] ?? 'Unknown Scanner',
                             style: AppTheme.sans(
                                 fontSize: 14, fontWeight: FontWeight.w600),
                           ),
@@ -1166,10 +1254,7 @@ class _EmptyState extends StatelessWidget {
           Text(
             'NO TICKETS YET',
             style: AppTheme.merri(
-              fontSize: 18,
-              letterSpacing: 3,
-              color: AppTheme.subTextColor,
-            ),
+                fontSize: 18, letterSpacing: 3, color: AppTheme.subTextColor),
           ),
           const SizedBox(height: 12),
           Text(

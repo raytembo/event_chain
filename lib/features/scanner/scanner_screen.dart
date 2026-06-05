@@ -36,11 +36,11 @@ final class ZipExtractError extends ScanError {
 }
 
 final class NoChainsError extends ScanError {
-  const NoChainsError() : super('No event chains available');
+  const NoChainsError() : super('No event details available.');
 }
 
 final class VerificationInterrupted extends ScanError {
-  const VerificationInterrupted() : super('Scan interrupted');
+  const VerificationInterrupted() : super('Scan interrupted.');
 }
 
 // ── Auto-delete file helper ───────────────────────────────────────────────
@@ -151,13 +151,13 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
     final allowed = await _requestP2PPermissions();
     if (!allowed) {
-      _showError("P2P sharing requires Location and Bluetooth permissions.");
+      _showError("Nearby sharing needs Location and Bluetooth permissions.");
       return;
     }
 
     _safeSetState(() {
       _scanning = true;
-      _statusMessage = 'Initializing local P2P discovery server…';
+      _statusMessage = 'Setting up connection...';
     });
 
     // Create a dynamic display string for the target discovery pipeline
@@ -168,8 +168,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         broadcastIdentity,
         Strategy.P2P_STAR,
         onConnectionInitiated: (endpointId, connectionInfo) async {
-          // Displays the incoming custom sender name set up in WalletScreen
-          _setStatus('Connecting to ${connectionInfo.endpointName}…');
+          _setStatus('Connecting...');
           await Nearby().acceptConnection(
             endpointId,
             onPayLoadRecieved: _onP2PPayloadReceived,
@@ -181,9 +180,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             _safeSetState(() {
               _connectedEndpointId = endpointId;
               _scanning = true;
-              _statusMessage = 'Connected! Waiting for sender payload…';
+              _statusMessage = 'Connected! Waiting for ticket...';
             });
           } else {
+            debugPrint('P2P Pipeline connection error status: $status');
             _safeSetState(() {
               _scanning = false;
               _connectedEndpointId = null;
@@ -192,9 +192,11 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           }
         },
         onDisconnected: (endpointId) {
+          debugPrint(
+              'P2P Pipeline remote disconnected from target: $endpointId');
           _safeSetState(() {
             _connectedEndpointId = null;
-            if (_scanning && _statusMessage.contains('Waiting for sender')) {
+            if (_scanning && _statusMessage.contains('Waiting for ticket')) {
               _scanning = false;
             }
           });
@@ -205,14 +207,15 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       _safeSetState(() {
         _isAdvertising = true;
         _statusMessage =
-            'Visible to nearby senders. Open Share menu on source…';
+            'Ready to receive. Open the share menu on the sender device...';
       });
     } catch (e) {
+      debugPrint('P2P Server Failure to initialize: ${e.toString()}');
       _safeSetState(() {
         _scanning = false;
         _isAdvertising = false;
       });
-      _showError('Could not start P2P sharing platform: $e');
+      _showError('Could not start wireless sharing.');
     }
   }
 
@@ -220,7 +223,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     if (payload.type == PayloadType.FILE) {
       if (payload.uri != null) {
         _incomingFileUris[payload.id] = payload.uri!;
-        _setStatus('Receiving inbound file container stream…');
+        _setStatus('Receiving ticket...');
       }
     }
   }
@@ -232,7 +235,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         if (update.totalBytes > 0) {
           final progress = (update.bytesTransferred / update.totalBytes * 100)
               .toStringAsFixed(0);
-          _setStatus('Downloading data payload: $progress%');
+          _setStatus('Downloading: $progress%');
         }
         break;
 
@@ -240,7 +243,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         final String? tempUriPath = _incomingFileUris[update.id];
 
         if (tempUriPath != null) {
-          _setStatus('Extracting local transport stream…');
+          _setStatus('Opening ticket file...');
           try {
             final tempDir = await getTemporaryDirectory();
             final String originalFileName = tempUriPath.split('/').last;
@@ -272,19 +275,23 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               await _verifyImage(targetDestPath);
             }
           } catch (e) {
+            debugPrint('Error handling success payload streaming archive: $e');
             _safeSetState(() => _scanning = false);
-            _showError('Failed to decode incoming streaming container: $e');
+            _showError('Failed to read the received ticket.');
           }
         } else {
+          debugPrint(
+              'P2P Error: Success status achieved but index URI tracking lost.');
           _safeSetState(() => _scanning = false);
-          _showError('Payload verified transfer but index tracking was lost.');
+          _showError('Transfer error. Please try again.');
         }
         break;
 
       case PayloadStatus.FAILURE:
+        debugPrint('P2P Failure status caught for active channel transfer.');
         _safeSetState(() => _scanning = false);
         _incomingFileUris.remove(update.id);
-        _showError('Local connection transfer dropped.');
+        _showError('Connection lost.');
         break;
 
       case PayloadStatus.NONE:
@@ -314,7 +321,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       final file = result.files.first;
       if (file.path == null) {
-        throw const ImageReadError('Could not access selected file');
+        throw const ImageReadError('Could not open the selected file.');
       }
 
       if (file.path!.toLowerCase().endsWith('.zip')) {
@@ -323,6 +330,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         await _verifyImage(file.path!);
       }
     } catch (e) {
+      debugPrint('File picking process context error: $e');
       _safeSetState(() => _scanning = false);
       _showError('$e');
     } finally {
@@ -335,7 +343,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   Future<void> _processZipAndVerify(String zipPath) async {
     _safeSetState(() {
       _scanning = true;
-      _statusMessage = 'Unpacking ZIP archive…';
+      _statusMessage = 'Opening ZIP file...';
     });
 
     String? extractedImagePath;
@@ -343,7 +351,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     try {
       final zipFile = File(zipPath);
       if (!await zipFile.exists()) {
-        throw const ZipExtractError('ZIP archive file no longer exists');
+        throw const ZipExtractError('File not found.');
       }
 
       final bytes = await zipFile.readAsBytes();
@@ -362,7 +370,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       if (targetImageFile == null) {
         throw const ZipExtractError(
-            'No valid ticket images (.png, .bmp, .jpg) found inside ZIP');
+            'No ticket image found inside the ZIP file.');
       }
 
       final tempDir = await getTemporaryDirectory();
@@ -376,7 +384,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     } on ScanError {
       rethrow;
     } catch (e) {
-      throw ZipExtractError('Failed to parse ZIP archive contents: $e');
+      debugPrint('Decompression exception during package extraction: $e');
+      throw ZipExtractError('Could not open the ZIP file.');
     } finally {
       if (extractedImagePath != null) {
         final localFile = File(extractedImagePath);
@@ -393,7 +402,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   Future<void> _verifyImage(String sourcePath) async {
     _safeSetState(() {
       _scanning = true;
-      _statusMessage = 'Reading image…';
+      _statusMessage = 'Reading image...';
     });
 
     final tempDir = await getTemporaryDirectory();
@@ -412,14 +421,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     try {
       final src = File(sourcePath);
       if (!await src.exists()) {
-        throw const ImageReadError('Source image no longer exists');
+        throw const ImageReadError('Ticket image not found.');
       }
 
       await src.copy(persistentPath);
 
       final fileBytes = await File(persistentPath).length();
       if (fileBytes < 1024) {
-        throw ImageReadError('Image too small (${fileBytes}B)');
+        throw const ImageReadError('Image file is invalid or too small.');
       }
 
       debugPrint(
@@ -429,7 +438,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       List<String> eventNames = ffi.listEvents();
 
       if (eventNames.isEmpty) {
-        _setStatus('Fetching event chains from server…');
+        _setStatus('Loading event details...');
         eventNames = await _tryDownloadChains();
       }
 
@@ -441,11 +450,11 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       if (result.verified &&
           result.eventName != null &&
           result.blockIndex != null) {
-        _setStatus('Loading ticket details…');
+        _setStatus('Loading ticket details...');
         dbData =
             await _supabaseLookupByBlock(result.eventName!, result.blockIndex!);
       } else {
-        _setStatus('Checking ticket database…');
+        _setStatus('Checking database...');
         dbData = await _supabaseLookupByImageHash(persistentPath);
       }
 
@@ -468,12 +477,13 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     } on VerificationInterrupted {
       debugPrint('[Scanner] Widget unmounted during scan');
     } on ScanError catch (e) {
+      debugPrint('Scan validation rule handled: ${e.message}');
       _safeSetState(() => _scanning = false);
       _showError(e.message);
     } catch (e, stack) {
-      debugPrint('[Scanner] Unexpected error: $e\n$stack');
+      debugPrint('[Scanner] Unexpected layout framework error: $e\n$stack');
       _safeSetState(() => _scanning = false);
-      _showError('Unexpected error: $e');
+      _showError('Something went wrong. Please try again.');
     } finally {
       persistentFile.dispose();
     }
@@ -494,7 +504,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       for (int i = 1; i < chainSize; i++) {
         if (!mounted) break;
 
-        _setStatus('Checking $eventName · block $i / ${chainSize - 1}…');
+        _setStatus('Checking $eventName · step $i / ${chainSize - 1}…');
 
         try {
           final ok = await ffi.extractAndVerify(
@@ -508,7 +518,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                 verified: true, eventName: eventName, blockIndex: i);
           }
         } catch (e, stack) {
-          debugPrint('[Scanner] block $i error (skipping): $e\n$stack');
+          debugPrint(
+              '[Scanner] block $i layout evaluation error (skipping): $e\n$stack');
           continue;
         }
       }
@@ -538,7 +549,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       return EventChainFFI.instance.listEvents();
     } catch (e) {
-      debugPrint('[Scanner] chain download error: $e');
+      debugPrint(
+          '[Scanner] background block initialization download error: $e');
       return [];
     }
   }
@@ -560,7 +572,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           .eq('block_index', blockIndex)
           .maybeSingle();
     } catch (e) {
-      debugPrint('[Scanner] Supabase block lookup error: $e');
+      debugPrint('[Scanner] Supabase query context lookup error: $e');
       return null;
     }
   }
@@ -673,14 +685,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             ),
             const SizedBox(height: 40),
             Text(
-              _isAdvertising ? 'P2P Network Active' : 'Select Ticket Payload',
+              _isAdvertising ? 'Ready to Receive' : 'Select Ticket File',
               style: AppTheme.merri(fontSize: 24, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
             Text(
               _isAdvertising
-                  ? 'Ready to capture incoming file transfers…\nKeep your sender device nearby.'
-                  : 'Pick a PNG, BMP, or ZIP archive file\ncontaining ticket payloads.',
+                  ? 'Ready to get tickets…\nKeep the sender device close by.'
+                  : 'Choose a PNG, BMP, or ZIP file\ncontaining your ticket.',
               textAlign: TextAlign.center,
               style: AppTheme.sans(fontSize: 14, color: AppTheme.subTextColor),
             ),
@@ -703,7 +715,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                       onPressed: _pickImageFile,
                       icon: const Icon(Icons.folder_open, size: 22),
                       label: Text(
-                        'PICK FILE PAYLOAD',
+                        'CHOOSE TICKET FILE',
                         style: AppTheme.sans(
                           fontSize: 15,
                           fontWeight: FontWeight.w700,
@@ -739,7 +751,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                       label: Text(
                         _isAdvertising
                             ? 'STOP WIRELESS RECEIVE'
-                            : 'RECEIVE VIA NEARBY SHARE',
+                            : 'RECEIVE FROM NEARBY DEVICE',
                         style: AppTheme.sans(
                           fontSize: 15,
                           fontWeight: FontWeight.w700,

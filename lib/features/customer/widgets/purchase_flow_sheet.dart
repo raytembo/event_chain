@@ -1,18 +1,10 @@
 // lib/features/customer/widgets/purchase_flow_sheet.dart
-//
-// 4-step purchase sheet:
-//   Step 0 — Details form (Auto-filled from user profile)
-//   Step 1 — Payment form (Cardholder name auto-filled)
-//   Step 2 — Processing spinner
-//   Step 3 — Success
-//
-// All ticket/payment DB writes, blockchain mining, and stego embedding are
-// delegated to CustomerTicketService. This widget only owns the UI flow and
-// card input collection.
 
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../shared/theme/app_theme.dart';
@@ -30,7 +22,7 @@ class PurchaseFlowSheet extends StatefulWidget {
   final String ticketTypeId;
   final double price;
   final int quantityAvailable;
-  final String posterUrl; // ← needed by CustomerTicketService for stego embed
+  final String posterUrl;
 
   const PurchaseFlowSheet({
     super.key,
@@ -42,7 +34,7 @@ class PurchaseFlowSheet extends StatefulWidget {
     required this.ticketTypeId,
     required this.price,
     required this.quantityAvailable,
-    this.posterUrl = '', // optional: service falls back to synthetic cover
+    this.posterUrl = '',
   });
 
   @override
@@ -50,12 +42,9 @@ class PurchaseFlowSheet extends StatefulWidget {
 }
 
 class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
-  // ── State ──────────────────────────────────────────────────────────────────
-
   int _step = 0;
   bool _isProcessing = false;
 
-  // Step 0 — details
   final _detailsFormKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
@@ -63,13 +52,11 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
   final _idCtrl = TextEditingController();
   bool _detailsTried = false;
 
-  // Step 1 — payment
   final _cardNumCtrl = TextEditingController();
   final _expiryCtrl = TextEditingController();
   final _cvvCtrl = TextEditingController();
   final _holderCtrl = TextEditingController();
 
-  // Step 3 — result
   String? _stegoPath;
   String? _errorMessage;
 
@@ -79,8 +66,6 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     'Processing…',
     'Purchase Complete!',
   ];
-
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   @override
   void initState() {
@@ -101,42 +86,73 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     super.dispose();
   }
 
-  // ── Auto-Fill ──────────────────────────────────────────────────────────────
+  String _generateFakeNationalId() {
+    final random = Random();
+    final districts = ['LL', 'BT', 'ZA', 'MZ', 'NRB', 'SA', 'KU', 'KA'];
+    final district = districts[random.nextInt(districts.length)];
+    final regNo = List.generate(6, (_) => random.nextInt(10).toString()).join();
+    final checkDigit =
+        List.generate(2, (_) => random.nextInt(10).toString()).join();
+    return '10/$district/$regNo/$checkDigit';
+  }
+
+  Future<void> _saveLocalPaymentAndIdData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('cached_national_id', _idCtrl.text.trim());
+      await prefs.setString('cached_card_number', _cardNumCtrl.text.trim());
+      await prefs.setString('cached_card_expiry', _expiryCtrl.text.trim());
+      await prefs.setString('cached_card_holder', _holderCtrl.text.trim());
+    } catch (_) {}
+  }
 
   Future<void> _autoFillProfile() async {
     try {
       final supabase = Supabase.instance.client;
       final user = supabase.auth.currentUser;
-      if (user == null) return;
+      if (user != null) {
+        if (user.email != null && user.email!.isNotEmpty) {
+          _emailCtrl.text = user.email!;
+        }
 
-      if (user.email != null && user.email!.isNotEmpty) {
-        _emailCtrl.text = user.email!;
+        final profile = await supabase
+            .from('profiles')
+            .select('display_name, phone')
+            .eq('id', user.id)
+            .maybeSingle();
+
+        if (profile != null && mounted) {
+          setState(() {
+            if (profile['display_name'] != null) {
+              _nameCtrl.text = profile['display_name'] as String;
+              _holderCtrl.text = profile['display_name'] as String;
+            }
+            if (profile['phone'] != null) {
+              _phoneCtrl.text = profile['phone'] as String;
+            }
+          });
+        }
       }
 
-      final profile = await supabase
-          .from('profiles')
-          .select('display_name, phone')
-          .eq('id', user.id)
-          .maybeSingle();
+      final prefs = await SharedPreferences.getInstance();
+      final savedId = prefs.getString('cached_national_id');
+      final savedCardNum = prefs.getString('cached_card_number');
+      final savedExpiry = prefs.getString('cached_card_expiry');
+      final savedHolder = prefs.getString('cached_card_holder');
 
-      if (profile != null && mounted) {
+      if (mounted) {
         setState(() {
-          if (profile['display_name'] != null) {
-            _nameCtrl.text = profile['display_name'] as String;
-            _holderCtrl.text = profile['display_name'] as String;
-          }
-          if (profile['phone'] != null) {
-            _phoneCtrl.text = profile['phone'] as String;
-          }
+          _idCtrl.text = (savedId != null && savedId.isNotEmpty)
+              ? savedId
+              : _generateFakeNationalId();
+
+          if (savedCardNum != null) _cardNumCtrl.text = savedCardNum;
+          if (savedExpiry != null) _expiryCtrl.text = savedExpiry;
+          if (savedHolder != null) _holderCtrl.text = savedHolder;
         });
       }
-    } catch (e) {
-      debugPrint(
-          'Silent warning: Failed to auto-fill purchase profile data: $e');
-    }
+    } catch (_) {}
   }
-
-  // ── Helpers ────────────────────────────────────────────────────────────────
 
   void _goToStep(int s) => setState(() => _step = s);
 
@@ -150,8 +166,6 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
       duration: const Duration(seconds: 3),
     ));
   }
-
-  // ── Step 0: validate + live availability check ─────────────────────────────
 
   Future<void> _submitDetails() async {
     setState(() => _detailsTried = true);
@@ -171,8 +185,6 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     _goToStep(1);
   }
 
-  // ── Step 1: validate card fields ───────────────────────────────────────────
-
   bool _validateCard() {
     final clean = _cardNumCtrl.text.replaceAll(' ', '');
     if (clean.length < 13 ||
@@ -185,12 +197,6 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     return true;
   }
 
-  // ── Step 1 → 2 → 3: process payment ───────────────────────────────────────
-  //
-  // All heavy lifting (blockchain sync, block mining, stego embed, Storage
-  // uploads, DB inserts) is handled by CustomerTicketService. This method
-  // only drives the UI step transitions and surfaces errors.
-
   Future<void> _processPayment() async {
     if (_isProcessing) return;
     if (!_validateCard()) return;
@@ -199,6 +205,8 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     _goToStep(2);
 
     try {
+      await _saveLocalPaymentAndIdData();
+
       final result = await CustomerTicketService.instance.purchaseTicket(
         eventId: widget.eventId,
         eventName: widget.eventName,
@@ -206,6 +214,7 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
         eventDate: widget.eventDate,
         venue: widget.venue,
         ticketType: widget.ticketType,
+        ticketTypeId: widget.ticketTypeId, // Transmitted strictly
         price: widget.price,
       );
 
@@ -227,8 +236,6 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     }
   }
 
-  // ── Share ──────────────────────────────────────────────────────────────────
-
   Future<void> _shareTicket() async {
     if (_stegoPath == null) return;
     await Share.shareXFiles(
@@ -238,8 +245,6 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
           'Type: ${widget.ticketType} · Holder: ${_nameCtrl.text}',
     );
   }
-
-  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -281,8 +286,6 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
         return const SizedBox.shrink();
     }
   }
-
-  // ── Step 0 — Details ───────────────────────────────────────────────────────
 
   Widget _buildDetailsStep() {
     return SingleChildScrollView(
@@ -336,9 +339,8 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
               icon: Icons.phone_outlined,
               type: TextInputType.phone,
               validator: (v) {
-                if (v == null || v.trim().isEmpty) {
+                if (v == null || v.trim().isEmpty)
                   return 'Phone number is required';
-                }
                 if (v.trim().length < 7) return 'Enter a valid phone number';
                 return null;
               },
@@ -350,9 +352,8 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
               hint: 'e.g. 10/NRB/987654/01',
               icon: Icons.badge_outlined,
               validator: (v) {
-                if (v == null || v.trim().isEmpty) {
+                if (v == null || v.trim().isEmpty)
                   return 'ID / Passport number is required';
-                }
                 if (v.trim().length < 5) return 'ID number is too short';
                 return null;
               },
@@ -372,8 +373,6 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
       ),
     );
   }
-
-  // ── Step 1 — Payment ───────────────────────────────────────────────────────
 
   Widget _buildPaymentStep() {
     return SingleChildScrollView(
@@ -473,8 +472,6 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
     );
   }
 
-  // ── Step 2 — Processing ────────────────────────────────────────────────────
-
   Widget _buildProcessingStep() => Center(
         key: const ValueKey(2),
         child: Column(
@@ -492,8 +489,6 @@ class _PurchaseFlowSheetState extends State<PurchaseFlowSheet> {
           ],
         ),
       );
-
-  // ── Step 3 — Success ───────────────────────────────────────────────────────
 
   Widget _buildSuccessStep() {
     return SingleChildScrollView(

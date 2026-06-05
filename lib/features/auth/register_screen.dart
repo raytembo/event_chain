@@ -15,8 +15,11 @@
 //     The only valid values are 'owner' and 'customer', which map exactly
 //     to the Dart UserRole enum values via UserRole.name.
 
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/models/user_model.dart';
 import '../../shared/theme/app_theme.dart';
 import 'auth_provider.dart';
@@ -37,11 +40,14 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   final _confirmCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
   final _bioCtrl = TextEditingController();
-  final _avatarUrlCtrl = TextEditingController();
 
   bool _obscurePass = true;
   bool _obscureConfirm = true;
   UserRole _role = UserRole.customer;
+
+  // Local state for picked file and background uploading status
+  File? _avatarFile;
+  bool _localLoading = false;
 
   @override
   void dispose() {
@@ -51,20 +57,64 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     _confirmCtrl.dispose();
     _phoneCtrl.dispose();
     _bioCtrl.dispose();
-    _avatarUrlCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickAvatar() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+      );
+      if (result != null && result.files.single.path != null) {
+        setState(() {
+          _avatarFile = File(result.files.single.path!);
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error picking image: $e',
+              style: AppTheme.sans(fontSize: 13)),
+          backgroundColor: AppTheme.tamperedColor,
+        ),
+      );
+    }
   }
 
   Future<void> _register() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // AuthNotifier.register() must:
-    //   1. Call supabase.auth.signUp() with:
-    //        data: {'full_name': displayName, 'role': role.name}
-    //      → The handle_new_user trigger picks these up and creates profiles row.
-    //   2. If phone/bio/avatarUrl are provided, issue a follow-up:
-    //        supabase.from('profiles').update({...}).eq('id', user.id)
-    //      because the trigger only writes id, email, display_name, role.
+    setState(() => _localLoading = true);
+
+    String? avatarUrl;
+    if (_avatarFile != null) {
+      try {
+        final supabase = Supabase.instance.client;
+        final fileExt = _avatarFile!.path.split('.').last;
+        final fileName =
+            'avatar_${DateTime.now().millisecondsSinceEpoch}.$fileExt';
+
+        // 1. Upload raw bytes to Supabase storage bucket named 'avatars'
+        await supabase.storage.from('avatars').upload(fileName, _avatarFile!);
+
+        // 2. Obtain public access URL link
+        avatarUrl = supabase.storage.from('avatars').getPublicUrl(fileName);
+      } catch (e) {
+        setState(() => _localLoading = false);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Avatar upload failed: $e',
+                style: AppTheme.sans(fontSize: 13)),
+            backgroundColor: AppTheme.tamperedColor,
+          ),
+        );
+        return;
+      }
+    }
+
     final ok = await ref.read(authProvider.notifier).register(
           email: _emailCtrl.text.trim(),
           password: _passCtrl.text,
@@ -72,12 +122,12 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
           role: _role,
           phone: _phoneCtrl.text.trim().isEmpty ? null : _phoneCtrl.text.trim(),
           bio: _bioCtrl.text.trim().isEmpty ? null : _bioCtrl.text.trim(),
-          avatarUrl: _avatarUrlCtrl.text.trim().isEmpty
-              ? null
-              : _avatarUrlCtrl.text.trim(),
+          avatarUrl:
+              avatarUrl, // Sends public URL to follow-up profiles trigger rewrite
         );
 
     if (!mounted) return;
+    setState(() => _localLoading = false);
 
     if (ok) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -110,6 +160,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = ref.watch(authProvider);
+    final isLoading = auth.loading || _localLoading;
 
     return Scaffold(
       backgroundColor: AppTheme.cardColor,
@@ -201,11 +252,13 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
               const SizedBox(height: 24),
 
               // ── Optional profile information ───────────────────────────────
-              // These fields are written to profiles via a follow-up UPDATE
-              // after signUp, since the handle_new_user trigger only fills
-              // id, email, display_name, and role.
               _sectionLabel('PROFILE INFORMATION (OPTIONAL)'),
               const SizedBox(height: 16),
+
+              _fieldLabel('AVATAR PROFILE IMAGE'),
+              const SizedBox(height: 8),
+              _buildAvatarPicker(),
+              const SizedBox(height: 24),
 
               _fieldLabel('PHONE NUMBER'),
               _field(
@@ -227,22 +280,6 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                       AppTheme.sans(color: AppTheme.subTextColor, fontSize: 10),
                 ),
               ),
-              const SizedBox(height: 20),
-
-              _fieldLabel('AVATAR URL'),
-              _field(
-                _avatarUrlCtrl,
-                'https://example.com/avatar.jpg',
-                keyboardType: TextInputType.url,
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) return null;
-                  final uri = Uri.tryParse(v.trim());
-                  if (uri == null || !uri.hasScheme) {
-                    return 'Enter a valid URL or leave blank';
-                  }
-                  return null;
-                },
-              ),
 
               const SizedBox(height: 40),
 
@@ -251,7 +288,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                 width: double.infinity,
                 height: 52,
                 child: ElevatedButton(
-                  onPressed: auth.loading ? null : _register,
+                  onPressed: isLoading ? null : _register,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.authenticColor,
                     foregroundColor: Colors.black,
@@ -259,7 +296,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                         borderRadius: BorderRadius.circular(12)),
                     elevation: 0,
                   ),
-                  child: auth.loading
+                  child: isLoading
                       ? const SizedBox(
                           width: 22,
                           height: 22,
@@ -307,6 +344,86 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  // ── Native File Selection Sub-Widget ────────────────────────────────────────
+
+  Widget _buildAvatarPicker() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Center(
+          child: GestureDetector(
+            onTap: _pickAvatar,
+            child: Stack(
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: 96,
+                  height: 96,
+                  decoration: BoxDecoration(
+                    color: AppTheme.cardMidColor,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: _avatarFile != null
+                          ? AppTheme.primaryColor
+                          : AppTheme.dividerColor,
+                      width: 2,
+                    ),
+                    image: _avatarFile != null
+                        ? DecorationImage(
+                            image: FileImage(_avatarFile!),
+                            fit: BoxFit.cover,
+                          )
+                        : null,
+                  ),
+                  child: _avatarFile == null
+                      ? const Icon(
+                          Icons.person_add_alt_1_outlined,
+                          color: AppTheme.subTextColor,
+                          size: 32,
+                        )
+                      : null,
+                ),
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: const BoxDecoration(
+                      color: AppTheme.primaryColor,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.camera_alt_rounded,
+                      color: Colors.black,
+                      size: 16,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (_avatarFile != null) ...[
+          const SizedBox(height: 8),
+          Center(
+            child: TextButton.icon(
+              onPressed: () => setState(() => _avatarFile = null),
+              icon: const Icon(Icons.delete_outline_rounded,
+                  size: 16, color: AppTheme.tamperedColor),
+              label: Text(
+                'Remove Photo',
+                style: AppTheme.sans(
+                    color: AppTheme.tamperedColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 

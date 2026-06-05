@@ -1,8 +1,11 @@
 // lib/features/customer/widgets/ticket_section.dart
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../../shared/theme/app_theme.dart';
 import '../../../shared/utilities/currency_formatter.dart';
+import '../providers/event_providers_customer.dart';
 import 'purchase_flow_sheet.dart';
 import 'shared_widgets.dart';
 
@@ -10,12 +13,13 @@ import 'shared_widgets.dart';
 // TICKET SECTION
 // ─────────────────────────────────────────────────────────────────────────────
 
-class TicketSection extends StatefulWidget {
+// Changed to ConsumerStatefulWidget to tap into the Riverpod state
+class TicketSection extends ConsumerStatefulWidget {
   final String eventId;
   final String eventName;
   final String eventDate;
   final String venue;
-  final String posterUrl; // ← needed so the service can embed the real poster
+  final String posterUrl;
   final List<Map<String, dynamic>> ticketTypes;
 
   const TicketSection({
@@ -29,24 +33,21 @@ class TicketSection extends StatefulWidget {
   });
 
   @override
-  State<TicketSection> createState() => _TicketSectionState();
+  ConsumerState<TicketSection> createState() => _TicketSectionState();
 }
 
-class _TicketSectionState extends State<TicketSection> {
+class _TicketSectionState extends ConsumerState<TicketSection> {
   late String _selectedId;
 
   @override
   void initState() {
     super.initState();
-    // Default to first available ticket type; fall back to first if all sold.
     final available = widget.ticketTypes
         .where((t) => (t['quantity_available'] as int? ?? 0) > 0);
     _selectedId = (available.isNotEmpty
         ? available.first
         : widget.ticketTypes.first)['id'] as String;
   }
-
-  // ── Helpers ────────────────────────────────────────────────────────────────
 
   Map<String, dynamic> get _selectedMap => widget.ticketTypes.firstWhere(
         (t) => t['id'] == _selectedId,
@@ -85,12 +86,14 @@ class _TicketSectionState extends State<TicketSection> {
         ticketTypeId: _selectedId,
         price: _selectedPrice,
         quantityAvailable: _selectedQty,
-        posterUrl: widget.posterUrl, // ← passed through to the service
+        posterUrl: widget.posterUrl,
       ),
-    );
+    ).then((_) {
+      // Refresh the events provider upon closing the ticket sheet to
+      // immediately visualize the stock quantity depletion
+      ref.invalidate(publicEventsProvider);
+    });
   }
-
-  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -116,8 +119,6 @@ class _TicketSectionState extends State<TicketSection> {
           ),
         ),
         const SizedBox(height: 12),
-
-        // ── Dropdown ──────────────────────────────────────────────────────
         Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
@@ -146,7 +147,6 @@ class _TicketSectionState extends State<TicketSection> {
                   value: id,
                   child: Row(
                     children: [
-                      // Type badge
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 3),
@@ -170,7 +170,6 @@ class _TicketSectionState extends State<TicketSection> {
                         ),
                       ),
                       const SizedBox(width: 12),
-                      // Price
                       Expanded(
                         child: Text(
                           'MK ${formatMwk(price)}',
@@ -181,7 +180,6 @@ class _TicketSectionState extends State<TicketSection> {
                           ),
                         ),
                       ),
-                      // Stock label
                       Text(
                         available ? '$qty left' : 'Sold out',
                         style: AppTheme.sans(
@@ -203,10 +201,7 @@ class _TicketSectionState extends State<TicketSection> {
             ),
           ),
         ),
-
         const SizedBox(height: 14),
-
-        // ── Summary row ───────────────────────────────────────────────────
         Row(
           children: [
             AvailabilityChip(
@@ -225,10 +220,7 @@ class _TicketSectionState extends State<TicketSection> {
             ),
           ],
         ),
-
         const SizedBox(height: 16),
-
-        // ── Buy button ────────────────────────────────────────────────────
         if (_selectedAvailable)
           PrimaryButton(
             label: 'Buy ${_selectedType.toUpperCase()} Ticket',

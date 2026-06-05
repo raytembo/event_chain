@@ -1,14 +1,4 @@
 // lib/features/customer/services/customer_ticket_service.dart
-//
-// Full customer ticket-purchase pipeline:
-//   1. Sync the event's blockchain from Supabase Storage
-//   2. Build a TicketModel for the buyer
-//   3. Mine a new block in the local C++ blockchain
-//   4. Embed ticket data steganographically (using event poster or synthetic cover)
-//   5. Upload the stego image to Supabase Storage
-//   6. Upload the updated blockchain file to Supabase Storage
-//   7. Insert the ticket row into the DB
-//   8. Insert a completed payment row into the DB
 
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -77,6 +67,7 @@ class CustomerTicketService {
     required String eventDate,
     required String venue,
     required String ticketType,
+    required String ticketTypeId, // Added: ID required to decrement stock
     required double price,
   }) async {
     try {
@@ -102,9 +93,6 @@ class CustomerTicketService {
       final tempPath = (await getTemporaryDirectory()).path;
 
       // ── Step 1: Sync the event's blockchain file from Supabase Storage ────
-      //
-      // The blockchain file is owned by the event organiser but shared via
-      // Supabase Storage so customers can append new blocks to it.
       await _syncBlockchain(eventName: eventName, eventsDir: eventsDir);
 
       // ── Step 2: Build the TicketModel ─────────────────────────────────────
@@ -126,15 +114,12 @@ class CustomerTicketService {
       }
 
       final blockIndex = _ffi.getEventSize(eventName) - 1;
-      final storageIndex = blockIndex + 1; // 1-based for storage paths
+      final storageIndex = blockIndex + 1;
 
       debugPrint(
           '✅ Block mined — blockIndex: $blockIndex  storageIndex: $storageIndex');
 
       // ── Step 4: Embed ticket data steganographically ──────────────────────
-      //
-      // The C++ stego layer only accepts lossless cover images (PNG/BMP).
-      // Download the event poster and convert it before embedding.
       final rawCoverPath = await _downloadPosterWithFallback(
         eventId: eventId,
         posterUrl: posterUrl,
@@ -158,7 +143,6 @@ class CustomerTicketService {
           stegoPath: finalStegoPath,
         );
       } else {
-        debugPrint('⚠️  No poster available — using synthetic cover');
         embedOk = await _ffi.embedTicket(
           eventName: eventName,
           blockIndex: blockIndex,
@@ -166,13 +150,9 @@ class CustomerTicketService {
         );
       }
 
-      if (!embedOk) {
+      if (!embedOk || !await File(finalStegoPath).exists()) {
         throw Exception(
             'Could not generate your ticket image. Please try again.');
-      }
-      if (!await File(finalStegoPath).exists()) {
-        throw Exception(
-            'Ticket image was not saved correctly. Please try again.');
       }
 
       // ── Step 5: Upload stego image to Supabase Storage ────────────────────
@@ -208,7 +188,6 @@ class CustomerTicketService {
       }
 
       // ── Step 8: Insert payment row ────────────────────────────────────────
-      // FIXED: Accessing property directly via dot notation instead of Map brackets
       final ticketDbId = record.id;
 
       await _svc.client.from('payments').insert({
@@ -216,12 +195,29 @@ class CustomerTicketService {
         'event_id': eventId,
         'buyer_id': authUser.id,
         'amount': price,
-        'currency': 'MWK', // fix currency too
+        'currency': 'MWK',
         'status': 'completed',
-        'processed_at': DateTime.now().toIso8601String(), // ← add this
+        'processed_at': DateTime.now().toIso8601String(),
         'buyer_name': buyerName,
         'buyer_email': authUser.email ?? '',
       });
+
+      // ── Step 9: Update Ticket Type Capacity ───────────────────────────────
+      final currentType = await _svc.client
+          .from('event_ticket_types')
+          .select('quantity_available, quantity_sold')
+          .eq('id', ticketTypeId)
+          .maybeSingle();
+
+      if (currentType != null) {
+        final avail = (currentType['quantity_available'] as num?)?.toInt() ?? 1;
+        final sold = (currentType['quantity_sold'] as num?)?.toInt() ?? 0;
+
+        await _svc.client.from('event_ticket_types').update({
+          'quantity_available': (avail - 1).clamp(0, avail), // Safely decrement
+          'quantity_sold': sold + 1, // Log as sold
+        }).eq('id', ticketTypeId);
+      }
 
       debugPrint('✅ Purchase complete — ticketId: ${ticket.ticketID}');
       return PurchaseResult.success(
@@ -235,8 +231,7 @@ class CustomerTicketService {
     } catch (e, stack) {
       debugPrint('❌ purchaseTicket failed: $e\n$stack');
       return PurchaseResult.failure(
-        e.toString().replaceFirst('Exception: ', ''),
-      );
+          e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -253,14 +248,9 @@ class CustomerTicketService {
       );
       if (ok) {
         _ffi.loadEvent(eventName);
-        debugPrint('✅ Blockchain synced for: $eventName');
-      } else {
-        // No existing chain — the first purchase will create one.
-        debugPrint(
-            'ℹ️  No existing blockchain for "$eventName" — starting fresh');
       }
     } catch (e) {
-      debugPrint('⚠️  Blockchain sync error (proceeding): $e');
+      debugPrint('⚠️  Blockchain sync error: $e');
     }
   }
 
@@ -269,26 +259,18 @@ class CustomerTicketService {
     required String appDocDir,
     required String eventName,
   }) async {
-    // Flush the in-memory chain to disk first.
     _ffi.saveEvent(eventName);
-
     final safeName =
         eventName.trim().replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
 
     for (final dirPath in [eventsDir, appDocDir]) {
       final file = File('$dirPath/$safeName.web3chain');
       if (await file.exists()) {
-        final uploaded = await _storage.uploadBlockchainFile(
-          eventName: eventName,
-          chainFile: file,
-        );
-        if (!uploaded) {
-          debugPrint('⚠️  Blockchain upload failed — local copy intact');
-        }
+        await _storage.uploadBlockchainFile(
+            eventName: eventName, chainFile: file);
         return;
       }
     }
-    debugPrint('⚠️  Blockchain file not found after save');
   }
 
   Future<String?> _downloadPosterWithFallback({
@@ -298,7 +280,6 @@ class CustomerTicketService {
   }) async {
     final storage = Supabase.instance.client.storage;
 
-    // Strategy 1: extract exact storage path from the public URL
     if (posterUrl.isNotEmpty) {
       try {
         final uri = Uri.tryParse(posterUrl);
@@ -314,35 +295,25 @@ class CustomerTicketService {
             final bytes =
                 await storage.from('event-posters').download(storagePath);
             await File(savePath).writeAsBytes(bytes);
-            debugPrint('✅ Poster downloaded via URL path → $savePath');
             return savePath;
           }
         }
-      } on StorageException catch (e) {
-        debugPrint('⚠️  URL-path download failed: ${e.message}');
-      } catch (e) {
-        debugPrint('⚠️  Poster download error: $e');
-      }
+      } catch (_) {}
     }
 
-    // Strategy 2: reconstruct path from eventId + common extensions
     for (final ext in ['png', 'jpg', 'jpeg', 'webp', 'bmp']) {
       try {
         final remotePath = 'events/$eventId/poster.$ext';
         final bytes = await storage.from('event-posters').download(remotePath);
         final savePath = '$tempDir/cover_$eventId.$ext';
         await File(savePath).writeAsBytes(bytes);
-        debugPrint('✅ Poster downloaded via eventId fallback ($ext)');
         return savePath;
       } on StorageException catch (e) {
-        final body = e.message;
-        if (body.contains('not_found') || body.contains('404')) continue;
-        debugPrint('❌ StorageException ($ext): ${e.message}');
-        return null;
+        if (!e.message.contains('not_found') && !e.message.contains('404')) {
+          debugPrint('❌ StorageException ($ext): ${e.message}');
+        }
       } catch (_) {}
     }
-
-    debugPrint('⚠️  No poster found — will use synthetic cover');
     return null;
   }
 
@@ -359,10 +330,8 @@ class CustomerTicketService {
           sourcePath.split('/').last.replaceAll(RegExp(r'\.[^.]+$'), '');
       final pngPath = '$tempDir/${base}_converted.png';
       await File(pngPath).writeAsBytes(byteData.buffer.asUint8List());
-      debugPrint('✅ Converted cover to PNG: $pngPath');
       return pngPath;
     } catch (e) {
-      debugPrint('❌ PNG conversion failed: $e');
       return null;
     }
   }
