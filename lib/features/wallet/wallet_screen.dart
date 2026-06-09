@@ -138,11 +138,11 @@ class _WalletCardState extends State<_WalletCard> {
   Color _typeColor(String type) {
     switch (type.toLowerCase()) {
       case 'vip':
-        return const Color(0xFFFFD700);
+        return AppTheme.primaryColor;
       case 'backstage':
-        return const Color(0xFFFF6D00);
+        return AppTheme.primaryColor;
       case 'student':
-        return const Color(0xFF69F0AE);
+        return AppTheme.primaryColor;
       default:
         return AppTheme.primaryColor;
     }

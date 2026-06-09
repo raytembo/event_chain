@@ -354,6 +354,41 @@ class EventsNotifier extends Notifier<EventsState> {
     }
   }
 
+  // ── Ticket scanning ───────────────────────────────────────────────────────
+
+  /// Returns the existing [scanned_at] timestamp string if the ticket has
+  /// already been scanned, or null if it has never been scanned.
+  Future<String?> checkTicketScanned(String ticketId) async {
+    try {
+      final row = await _svc.client
+          .from('tickets')
+          .select('scanned_at')
+          .eq('ticket_id', ticketId)
+          .maybeSingle();
+      return row?['scanned_at'] as String?;
+    } catch (e) {
+      debugPrint('❌ checkTicketScanned: $e');
+      return null;
+    }
+  }
+
+  /// Stamps [scanned_at] on the ticket row identified by [ticketId].
+  /// Returns true on success, false on any error.
+  Future<bool> markTicketScanned(String ticketId) async {
+    try {
+      await _svc.client
+          .from('tickets')
+          .update({'scanned_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('ticket_id', ticketId)
+          .select()
+          .single();
+      return true;
+    } catch (e) {
+      debugPrint('❌ markTicketScanned: $e');
+      return false;
+    }
+  }
+
   // ── Chain queries ──────────────────────────────────────────────────────────
 
   Future<bool> validateEvent(String eventName) => _ffi.validateEvent(eventName);

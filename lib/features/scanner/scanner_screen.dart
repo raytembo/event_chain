@@ -126,10 +126,13 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       if (authUser != null) {
         final mapData = jsonDecode(jsonEncode(authUser));
         if (mapData['fullName'] != null) return mapData['fullName'].toString();
-        if (mapData['displayName'] != null)
+        // FIX: curly_braces_in_flow_control_structures (was missing braces)
+        if (mapData['displayName'] != null) {
           return mapData['displayName'].toString();
-        if (mapData['full_name'] != null)
+        }
+        if (mapData['full_name'] != null) {
           return mapData['full_name'].toString();
+        }
       }
     } catch (_) {}
 
@@ -385,7 +388,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       rethrow;
     } catch (e) {
       debugPrint('Decompression exception during package extraction: $e');
-      throw ZipExtractError('Could not open the ZIP file.');
+      throw const ZipExtractError('Could not open the ZIP file.');
     } finally {
       if (extractedImagePath != null) {
         final localFile = File(extractedImagePath);
@@ -460,8 +463,45 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       if (!mounted) throw const VerificationInterrupted();
 
+      // ── Duplicate-scan guard ──────────────────────────────────────────────
+      bool alreadyScanned = false;
+      if (result.verified && dbData != null) {
+        final ticketId = dbData['ticket_id'] as String?;
+        if (ticketId != null) {
+          // Check whether this ticket was scanned in a previous session.
+          // The scanned_at column may already be set if dbData came from the
+          // view; fall back to a direct DB check only when the column is absent.
+          final existingTs = dbData.containsKey('scanned_at')
+              ? dbData['scanned_at'] as String?
+              : await ref
+                  .read(eventsProvider.notifier)
+                  .checkTicketScanned(ticketId);
+
+          if (existingTs != null) {
+            // Ticket was already used — surface the duplicate warning.
+            alreadyScanned = true;
+            dbData = {...dbData, 'scanned_at': existingTs};
+          } else {
+            // First scan — stamp the timestamp now.
+            _setStatus('Marking ticket as used...');
+            final stamped = await ref
+                .read(eventsProvider.notifier)
+                .markTicketScanned(ticketId);
+            if (stamped) {
+              dbData = {
+                ...dbData,
+                'scanned_at': DateTime.now().toUtc().toIso8601String(),
+              };
+            }
+          }
+        }
+      }
+
       _safeSetState(() => _scanning = false);
 
+      // FIX: use_build_context_synchronously — explicit mounted guard
+      // immediately before the context usage, after all async gaps above.
+      if (!mounted) return;
       await Navigator.push(
         context,
         MaterialPageRoute(
@@ -471,6 +511,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             eventName: result.eventName,
             blockIndex: result.blockIndex,
             supabaseTicketData: dbData,
+            alreadyScanned: alreadyScanned,
           ),
         ),
       );
@@ -631,6 +672,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             const SizedBox(
               width: 56,
               height: 56,
+              // FIX: prefer_const_constructors — add const to CircularProgressIndicator
               child: CircularProgressIndicator(
                 color: AppTheme.primaryColor,
                 strokeWidth: 3,

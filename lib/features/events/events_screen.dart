@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/models/ticket_record.dart';
 import '../../core/services/supabase_service.dart';
@@ -205,15 +206,18 @@ class _EventsScreenState extends ConsumerState<EventsScreen> {
     try {
       scaffold.showSnackBar(const SnackBar(
         content: Text('Removing event…'),
-        duration: Duration(seconds: 2),
+        duration: Duration(seconds: 3),
       ));
 
-      // The ON DELETE CASCADE on event_ticket_types and ON DELETE RESTRICT on
-      // tickets means we delete tickets first, then the event.
-      await svc.tickets.delete().eq('event_id', eventId);
-      await svc.events.delete().eq('id', eventId);
+      // ── Step 1: Delete DB rows via RPC ──────────────────────────────────────
+      // The RPC runs as SECURITY DEFINER so it bypasses RLS on the tickets
+      // table — this was the root cause of the silent-fail / FK violation.
+      await svc.client.rpc(
+        'delete_event_cascade',
+        params: {'p_event_id': eventId},
+      );
 
-      // Clean up all cloud storage assets in parallel.
+      // ── Step 2: Clean up cloud storage assets ───────────────────────────────
       await SupabaseStorageService.instance.deleteAllAssetsForEvent(
         eventId: eventId,
         eventName: eventName,
@@ -222,16 +226,30 @@ class _EventsScreenState extends ConsumerState<EventsScreen> {
       ref.invalidate(ownerEventsProvider);
       ref.read(eventsProvider.notifier).refresh();
 
+      scaffold.hideCurrentSnackBar();
       scaffold.showSnackBar(SnackBar(
         content:
             Text('Event removed.', style: AppTheme.sans(color: Colors.black)),
         backgroundColor: AppTheme.authenticColor,
         behavior: SnackBarBehavior.floating,
       ));
-    } catch (e) {
+    } on PostgrestException catch (e) {
+      scaffold.hideCurrentSnackBar();
       scaffold.showSnackBar(SnackBar(
-        content: Text('Could not delete event: $e',
-            style: AppTheme.sans(color: Colors.white)),
+        content: Text(
+          'Could not delete event: ${e.message}',
+          style: AppTheme.sans(color: Colors.white),
+        ),
+        backgroundColor: AppTheme.tamperedColor,
+        behavior: SnackBarBehavior.floating,
+      ));
+    } catch (e) {
+      scaffold.hideCurrentSnackBar();
+      scaffold.showSnackBar(SnackBar(
+        content: Text(
+          'Could not delete event: $e',
+          style: AppTheme.sans(color: Colors.white),
+        ),
         backgroundColor: AppTheme.tamperedColor,
         behavior: SnackBarBehavior.floating,
       ));

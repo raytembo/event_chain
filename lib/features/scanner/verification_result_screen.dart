@@ -1,7 +1,8 @@
 // lib/features/scanner/verification_result_screen.dart
 //
-// Optimized rewrite: Simplified consumer-friendly UI language, null-safe
-//                    ticket resolution, and clear validation status labels.
+// Supports three scan outcomes: VALID, INVALID, and ALREADY SCANNED.
+// The alreadyScanned flag (set by the duplicate-scan guard in scanner_screen)
+// drives a distinct orange warning state without affecting the authentic flag.
 
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -18,6 +19,11 @@ class VerificationResultScreen extends StatelessWidget {
   final int? blockIndex;
   final Map<String, dynamic>? supabaseTicketData;
 
+  /// True when the ticket passed cryptographic verification but was already
+  /// stamped in a previous scan session. The scanner_screen sets this and
+  /// merges the original scanned_at timestamp into supabaseTicketData.
+  final bool alreadyScanned;
+
   const VerificationResultScreen({
     super.key,
     required this.authentic,
@@ -25,17 +31,55 @@ class VerificationResultScreen extends StatelessWidget {
     this.eventName,
     this.blockIndex,
     this.supabaseTicketData,
+    this.alreadyScanned = false,
   });
+
+  // ── Timestamp helper ────────────────────────────────────────────────────
+
+  /// Converts an ISO-8601 UTC string into a human-readable local time string.
+  static String _formatTimestamp(String iso8601) {
+    try {
+      final dt = DateTime.parse(iso8601).toLocal();
+      final h = dt.hour.toString().padLeft(2, '0');
+      final m = dt.minute.toString().padLeft(2, '0');
+      final d = dt.day.toString().padLeft(2, '0');
+      final mo = dt.month.toString().padLeft(2, '0');
+      return '$d/$mo/${dt.year} at $h:$m';
+    } catch (_) {
+      return iso8601;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Resolve ticket from FFI first, fall back to model from Supabase JSON
     final TicketModel? ticket = _resolveTicket();
 
-    final Color color =
-        authentic ? AppTheme.authenticColor : AppTheme.tamperedColor;
-    final String label = authentic ? 'VALID TICKET' : 'INVALID TICKET';
-    final IconData icon = authentic ? Icons.verified : Icons.gpp_bad;
+    // ── Resolve banner state ───────────────────────────────────────────────
+    final Color color;
+    final String label;
+    final IconData icon;
+    final String? bannerSubtitle;
+
+    if (alreadyScanned) {
+      color = Colors.orange;
+      label = 'ALREADY SCANNED';
+      icon = Icons.warning_amber_rounded;
+      final ts = supabaseTicketData?['scanned_at'] as String?;
+      bannerSubtitle =
+          ts != null ? 'First used on ${_formatTimestamp(ts)}' : null;
+    } else if (authentic) {
+      color = AppTheme.authenticColor;
+      label = 'VALID TICKET';
+      icon = Icons.verified;
+      final ts = supabaseTicketData?['scanned_at'] as String?;
+      bannerSubtitle =
+          ts != null ? 'Admitted on ${_formatTimestamp(ts)}' : null;
+    } else {
+      color = AppTheme.tamperedColor;
+      label = 'INVALID TICKET';
+      icon = Icons.gpp_bad;
+      bannerSubtitle = null;
+    }
 
     return Scaffold(
       backgroundColor: AppTheme.cardColor,
@@ -50,7 +94,12 @@ class VerificationResultScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _ResultBanner(color: color, label: label, icon: icon),
+              _ResultBanner(
+                color: color,
+                label: label,
+                icon: icon,
+                subtitle: bannerSubtitle,
+              ),
               const SizedBox(height: 24),
               _ScannedImage(path: imagePath),
               const SizedBox(height: 32),
@@ -62,7 +111,10 @@ class VerificationResultScreen extends StatelessWidget {
                 _RawDataCard(data: supabaseTicketData!),
               ] else ...[
                 const _SectionHeader('Information'),
-                _EmptyState(authentic: authentic),
+                _EmptyState(
+                  authentic: authentic,
+                  alreadyScanned: alreadyScanned,
+                ),
               ],
               const SizedBox(height: 40),
               SizedBox(
@@ -126,13 +178,21 @@ class _ResultBanner extends StatelessWidget {
   final Color color;
   final String label;
   final IconData icon;
-  const _ResultBanner(
-      {required this.color, required this.label, required this.icon});
+
+  /// Optional line shown below the label — used for timestamps.
+  final String? subtitle;
+
+  const _ResultBanner({
+    required this.color,
+    required this.label,
+    required this.icon,
+    this.subtitle,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 32),
+      padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(20),
@@ -150,6 +210,17 @@ class _ResultBanner extends StatelessWidget {
               color: color,
             ),
           ),
+          if (subtitle != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              subtitle!,
+              textAlign: TextAlign.center,
+              style: AppTheme.sans(
+                fontSize: 13,
+                color: color.withValues(alpha: 0.8),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -269,10 +340,23 @@ class _RawDataCard extends StatelessWidget {
 
 class _EmptyState extends StatelessWidget {
   final bool authentic;
-  const _EmptyState({required this.authentic});
+  final bool alreadyScanned;
+  const _EmptyState({required this.authentic, required this.alreadyScanned});
 
   @override
   Widget build(BuildContext context) {
+    final String message;
+    if (alreadyScanned) {
+      message =
+          'This ticket has already been used for entry and cannot be admitted again.';
+    } else if (authentic) {
+      message =
+          'The ticket is valid, but its individual data records could not be read.';
+    } else {
+      message =
+          'This ticket could not be found or verified in our system listings.';
+    }
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -281,9 +365,7 @@ class _EmptyState extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
       ),
       child: Text(
-        authentic
-            ? 'The ticket is valid, but its individual data records could not be read.'
-            : 'This ticket could not be found or verified in our system listings.',
+        message,
         textAlign: TextAlign.center,
         style: AppTheme.sans(fontSize: 14, color: AppTheme.subTextColor),
       ),
