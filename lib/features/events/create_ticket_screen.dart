@@ -54,7 +54,12 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
 
   final TextEditingController _priceCtrl = TextEditingController();
 
-  // ── Card payment controllers ───────────────────────────────────────────────
+  // ── Payment selection & controllers ──────────────────────────────────────
+  String _paymentMethod =
+      'Card'; // Options: 'Card', 'TNM Mpamba', 'Airtel Money'
+  final TextEditingController _phoneCtrl = TextEditingController();
+
+  // Card payment controllers
   final TextEditingController _cardNumCtrl = TextEditingController();
   final TextEditingController _expiryCtrl = TextEditingController();
   final TextEditingController _cvvCtrl = TextEditingController();
@@ -78,7 +83,7 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     _ownerNameCtrl = TextEditingController(
       text: user?.userMetadata?['full_name'] as String? ?? '',
     );
-    // Auto-fill cardholder name from the same source.
+    // Auto-fill cardholder name and default phone fallback if applicable
     _cardHolderCtrl.text = user?.userMetadata?['full_name'] as String? ?? '';
     _authOwnerID = user?.id ?? '';
     _resolvedOwnerId = _authOwnerID; // Default baseline fallback assignment
@@ -89,6 +94,7 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
   void dispose() {
     _ownerNameCtrl.dispose();
     _priceCtrl.dispose();
+    _phoneCtrl.dispose();
     _cardNumCtrl.dispose();
     _expiryCtrl.dispose();
     _cvvCtrl.dispose();
@@ -178,28 +184,114 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     }
   }
 
-  // ── Card validation ────────────────────────────────────────────────────────
+  // ── Payment Validation ─────────────────────────────────────────────────────
 
-  /// Returns null on success, or an error message string on failure.
-  String? _validateCard() {
-    final clean = _cardNumCtrl.text.replaceAll(' ', '');
-    if (clean.length < 13) return 'Enter a valid card number.';
-    if (_expiryCtrl.text.length < 5) return 'Enter a valid expiry date.';
-    if (_cvvCtrl.text.length < 3) return 'Enter a valid CVV.';
-    if (_cardHolderCtrl.text.trim().isEmpty) {
-      return 'Enter the cardholder name.';
+  String? _validatePayment() {
+    if (_paymentMethod == 'Card') {
+      final clean = _cardNumCtrl.text.replaceAll(' ', '');
+      if (clean.length < 13) return 'Enter a valid card number.';
+      if (_expiryCtrl.text.length < 5) return 'Enter a valid expiry date.';
+      if (_cvvCtrl.text.length < 3) return 'Enter a valid CVV.';
+      if (_cardHolderCtrl.text.trim().isEmpty) {
+        return 'Enter the cardholder name.';
+      }
+    } else {
+      final phone = _phoneCtrl.text.trim();
+      if (phone.isEmpty) return 'Enter your mobile money phone number.';
+      if (phone.length != 10) return 'Enter a valid 10-digit phone number.';
+
+      // Strict prefix validations
+      if (_paymentMethod == 'TNM Mpamba' && !phone.startsWith('08')) {
+        return 'Invalid TNM Mpamba number. Must start with 08.';
+      }
+      if (_paymentMethod == 'Airtel Money' && !phone.startsWith('09')) {
+        return 'Invalid Airtel Money number. Must start with 09.';
+      }
     }
     return null;
   }
 
-  // ── Submission ─────────────────────────────────────────────────────────────
+  // ── Submission & Processing Dialog Flows ───────────────────────────────────
+
+  void _showMobileMoneySimulationDialog(
+      String method, String phoneNumber, VoidCallback onSuccess) {
+    final isAirtel = method == 'Airtel Money';
+    final themeColor =
+        isAirtel ? const Color(0xFFD32F2F) : const Color(0xFF2E7D32);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext ctx) {
+        // Automatically proceed after simulating network delay
+        Future.delayed(const Duration(seconds: 3), () {
+          if (ctx.mounted) {
+            Navigator.pop(ctx); // Dismiss processing dialog
+            onSuccess(); // Proceed to save data assets
+          }
+        });
+
+        return AlertDialog(
+          backgroundColor: AppTheme.cardColor,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          content: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: themeColor.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.phonelink_ring_rounded,
+                    color: themeColor,
+                    size: 40,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Processing $method',
+                  style: AppTheme.merri(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'A transaction validation prompt request was pushed to $phoneNumber. Waiting for network confirmation...',
+                  textAlign: TextAlign.center,
+                  style: AppTheme.sans(
+                    color: AppTheme.subTextColor,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: 30,
+                  height: 30,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    valueColor: AlwaysStoppedAnimation<Color>(themeColor),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
-    final cardError = _validateCard();
-    if (cardError != null) {
-      _showSnack(cardError, isError: true);
+    final paymentError = _validatePayment();
+    if (paymentError != null) {
+      _showSnack(paymentError, isError: true);
       return;
     }
 
@@ -210,6 +302,18 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
       return;
     }
 
+    if (_paymentMethod == 'Card') {
+      _executeTicketIssuance();
+    } else {
+      _showMobileMoneySimulationDialog(
+        _paymentMethod,
+        _phoneCtrl.text.trim(),
+        () => _executeTicketIssuance(),
+      );
+    }
+  }
+
+  Future<void> _executeTicketIssuance() async {
     setState(() => _submitting = true);
 
     showDialog(
@@ -226,7 +330,6 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
               eventId: widget.eventId,
               posterUrl: widget.posterUrl,
               ownerName: _ownerNameCtrl.text.trim(),
-              // Links to verified platform profile UID if found, else normal fallback
               ownerID: _resolvedOwnerId ?? _authOwnerID,
               eventDate: _formatEventDateForDisplay(eventDateRaw),
               venue: widget.prefillVenue ?? 'TBD',
@@ -248,7 +351,6 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
   }
 
   /// Formats a raw ISO-8601 timestamptz into a readable date for UI display
-  /// (e.g. "25 Dec 2025").  NOT used for the stego payload anymore.
   static String _formatEventDateForDisplay(String? raw) {
     if (raw == null || raw.isEmpty) {
       final now = DateTime.now();
@@ -497,7 +599,6 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
               ),
               textCapitalization: TextCapitalization.words,
               onChanged: (v) {
-                // Clear state triggers to enforce checking status validity if input changes
                 if (_hasCheckedProfile) {
                   setState(() {
                     _hasCheckedProfile = false;
@@ -592,17 +693,74 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     );
   }
 
-  // ── Payment section ────────────────────────────────────────────────────────
+  // ── Payment section selector & variations ──────────────────────────────────
 
   Widget _buildPaymentSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Row(
+        const _SectionLabel('Payment Method'),
+        const SizedBox(height: 8),
+        Row(
+          children: ['Card', 'TNM Mpamba', 'Airtel Money'].map((method) {
+            final isSelected = _paymentMethod == method;
+            return Expanded(
+              child: GestureDetector(
+                onTap: () => setState(() => _paymentMethod = method),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  margin: const EdgeInsets.symmetric(horizontal: 4),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? AppTheme.primaryColor.withValues(alpha: 0.15)
+                        : AppTheme.cardMidColor,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: isSelected
+                          ? AppTheme.primaryColor
+                          : AppTheme.dividerColor,
+                      width: isSelected ? 1.5 : 1,
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      method,
+                      style: AppTheme.sans(
+                        fontSize: 12,
+                        fontWeight:
+                            isSelected ? FontWeight.w700 : FontWeight.w500,
+                        color: isSelected
+                            ? AppTheme.primaryColor
+                            : AppTheme.subTextColor,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 24),
+        if (_paymentMethod == 'Card') ...[
+          _buildCardFields()
+        ] else ...[
+          _buildMobileMoneyFields()
+        ],
+      ],
+    );
+  }
+
+  Widget _buildCardFields() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            _SectionLabel('Payment'),
-            SizedBox(width: 6),
-            Icon(Icons.lock_outline, size: 12, color: AppTheme.subTextColor),
+            const _SectionLabel('Card Details'),
+            const SizedBox(width: 6),
+            const Icon(Icons.lock_outline,
+                size: 12, color: AppTheme.subTextColor),
           ],
         ),
         const SizedBox(height: 12),
@@ -671,6 +829,74 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     );
   }
 
+  Widget _buildMobileMoneyFields() {
+    final isAirtel = _paymentMethod == 'Airtel Money';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const _SectionLabel('Mobile Wallet Account'),
+            const SizedBox(width: 6),
+            const Icon(Icons.security_rounded,
+                size: 12, color: AppTheme.subTextColor),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _MobileWalletPreview(
+          phoneNumber: _phoneCtrl.text,
+          isAirtel: isAirtel,
+        ),
+        const SizedBox(height: 16),
+        Text(
+          'PHONE NUMBER',
+          style: AppTheme.sans(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 1.2,
+            color: AppTheme.subTextColor,
+          ),
+        ),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _phoneCtrl,
+          keyboardType: TextInputType.phone,
+          maxLength: 10,
+          onChanged: (_) => setState(() {}),
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          style: AppTheme.sans(fontSize: 14),
+          decoration: _inputDecoration(
+            isAirtel ? 'e.g., 0999123456' : 'e.g., 0888123456',
+            Icons.phone_android,
+          ).copyWith(counterText: ''),
+        ),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppTheme.cardMidColor,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppTheme.dividerColor),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.info_outline,
+                  size: 16, color: AppTheme.primaryColor),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'A secure validation authorization push prompt request will trigger automatically on your screen device.',
+                  style:
+                      AppTheme.sans(fontSize: 11, color: AppTheme.subTextColor),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   InputDecoration _inputDecoration(String hint, IconData icon) =>
       InputDecoration(
         hintText: hint,
@@ -679,7 +905,88 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
       );
 }
 
-// ── Card Preview & Formatters (Unchanged) ────────────────────────────────────
+// ── Mobile Wallet Preview Custom Widget ──────────────────────────────────────
+class _MobileWalletPreview extends StatelessWidget {
+  final String phoneNumber;
+  final bool isAirtel;
+
+  const _MobileWalletPreview({
+    required this.phoneNumber,
+    required this.isAirtel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      height: 130,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: isAirtel
+              ? [const Color(0xFFD32F2F), const Color(0xFF991B1B)]
+              : [const Color(0xFF2E7D32), const Color(0xFF14532D)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  isAirtel ? 'AIRTEL MONEY' : 'TNM MPAMBA',
+                  style: AppTheme.sans(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.white,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+                const Icon(Icons.account_balance_wallet_outlined,
+                    color: Colors.white, size: 20),
+              ],
+            ),
+            const Spacer(),
+            Text(
+              phoneNumber.isEmpty
+                  ? (isAirtel ? '099X XXX XXX' : '088X XXX XXX')
+                  : phoneNumber,
+              style: AppTheme.sans(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+                letterSpacing: 1.5,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'MOBILE PAYMENT WALLET',
+              style: AppTheme.sans(
+                fontSize: 8,
+                color: Colors.white.withValues(alpha: 0.6),
+                letterSpacing: 1.0,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Card Preview & Formatters ────────────────────────────────────────────────
 class _CardPreview extends StatelessWidget {
   final String number;
   final String holder;

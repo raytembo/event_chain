@@ -9,11 +9,6 @@ import '../providers/event_providers_customer.dart';
 import 'purchase_flow_sheet.dart';
 import 'shared_widgets.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TICKET SECTION
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Changed to ConsumerStatefulWidget to tap into the Riverpod state
 class TicketSection extends ConsumerStatefulWidget {
   final String eventId;
   final String eventName;
@@ -39,11 +34,17 @@ class TicketSection extends ConsumerStatefulWidget {
 class _TicketSectionState extends ConsumerState<TicketSection> {
   late String _selectedId;
 
+  // Real capacity logic mapped from create_ticket_screen.dart
+  int _getRemainingQty(Map<String, dynamic> t) {
+    final available = (t['quantity_available'] as num? ?? 0).toInt();
+    final sold = (t['quantity_sold'] as num? ?? 0).toInt();
+    return (available - sold).clamp(0, available);
+  }
+
   @override
   void initState() {
     super.initState();
-    final available = widget.ticketTypes
-        .where((t) => (t['quantity_available'] as int? ?? 0) > 0);
+    final available = widget.ticketTypes.where((t) => _getRemainingQty(t) > 0);
     _selectedId = (available.isNotEmpty
         ? available.first
         : widget.ticketTypes.first)['id'] as String;
@@ -56,7 +57,7 @@ class _TicketSectionState extends ConsumerState<TicketSection> {
 
   String get _selectedType => _selectedMap['ticket_type'] as String;
   double get _selectedPrice => (_selectedMap['price'] as num).toDouble();
-  int get _selectedQty => _selectedMap['quantity_available'] as int? ?? 0;
+  int get _selectedQty => _getRemainingQty(_selectedMap);
   bool get _selectedAvailable => _selectedQty > 0;
 
   Color _typeColor(String type) {
@@ -89,8 +90,6 @@ class _TicketSectionState extends ConsumerState<TicketSection> {
         posterUrl: widget.posterUrl,
       ),
     ).then((_) {
-      // Refresh the events provider upon closing the ticket sheet to
-      // immediately visualize the stock quantity depletion
       ref.invalidate(publicEventsProvider);
     });
   }
@@ -138,7 +137,7 @@ class _TicketSectionState extends ConsumerState<TicketSection> {
               items: widget.ticketTypes.map((t) {
                 final type = t['ticket_type'] as String;
                 final price = (t['price'] as num).toDouble();
-                final qty = t['quantity_available'] as int? ?? 0;
+                final qty = _getRemainingQty(t);
                 final color = _typeColor(type);
                 final available = qty > 0;
                 final id = t['id'] as String;
@@ -251,10 +250,6 @@ class _TicketSectionState extends ConsumerState<TicketSection> {
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AVAILABILITY CHIP
-// ─────────────────────────────────────────────────────────────────────────────
 
 class AvailabilityChip extends StatelessWidget {
   final int qty;
