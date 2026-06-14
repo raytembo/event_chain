@@ -1,27 +1,65 @@
-// This is a basic Flutter widget test.
+// Widget test for EventChainApp.
 //
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// EventChainApp is pumped directly (we never call main()), so the real
+// SupabaseService and EventChainFFI singletons are never touched.
+// authProvider is overridden with a fake AuthNotifier so _AuthRouter can
+// build and route correctly without a live Supabase connection or the
+// native libEventChain.so.
 
 import 'package:flutter/material.dart';
-import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 import 'package:eventchain/main.dart';
+import 'package:eventchain/features/auth/auth_provider.dart';
+import 'package:eventchain/features/auth/login_screen.dart';
+
+/// Minimal [AuthNotifier] double that returns a fixed [AuthState] without
+/// subscribing to Supabase's onAuthStateChange stream.
+class _FixedAuthNotifier extends AuthNotifier {
+  _FixedAuthNotifier(this._state);
+
+  final AuthState _state;
+
+  @override
+  AuthState build() => _state;
+}
 
 void main() {
-  testWidgets('App renders with bottom navigation', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const ProviderScope(child: EventChainApp()));
+  testWidgets('shows the login screen when no user is signed in',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(
+            () => _FixedAuthNotifier(const AuthState(loading: false)),
+          ),
+        ],
+        child: const EventChainApp(),
+      ),
+    );
+    await tester.pump();
 
-    // Verify that the bottom navigation bar is present with expected labels.
-    expect(find.text('Events'), findsOneWidget);
-    expect(find.text('Scan'), findsOneWidget);
-    expect(find.text('Wallet'), findsOneWidget);
+    expect(find.byType(LoginScreen), findsOneWidget);
+    expect(find.text('EVENTCHAIN'), findsOneWidget);
+    expect(find.text('SIGN IN'), findsOneWidget);
+  });
 
-    // Verify initial tab is Events (look for navigation indicator)
-    expect(find.byIcon(Icons.event), findsOneWidget);
+  testWidgets('shows a loading spinner while the session is restoring',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(
+            () => _FixedAuthNotifier(const AuthState(loading: true)),
+          ),
+        ],
+        child: const EventChainApp(),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(LoginScreen), findsNothing);
   });
 }

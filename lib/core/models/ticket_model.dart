@@ -2,6 +2,32 @@
 //
 // Dart mirror of the C++ EventTicket struct.
 // Travels across the FFI boundary as JSON.
+//
+// Both fromJson factories use defensive helpers (_str, _dbl, _int) instead of
+// direct `as T` casts to prevent TypeErrors from malformed payloads.
+
+// ── Private parsing helpers ──────────────────────────────────────────────────
+
+String _str(dynamic v) {
+  if (v is String) return v;
+  return '';
+}
+
+double _dbl(dynamic v) {
+  if (v is num) return v.toDouble();
+  if (v is String) return double.tryParse(v) ?? 0.0;
+  return 0.0;
+}
+
+int _parseInt(dynamic v) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v) ?? 0;
+  return 0;
+}
+
+// ── TicketModel ─────────────────────────────────────────────────────────────
+
 class TicketModel {
   final String ticketID;
   final String eventName;
@@ -23,18 +49,21 @@ class TicketModel {
     required this.price,
   });
 
-  factory TicketModel.fromJson(Map<String, dynamic> json) => TicketModel(
-        ticketID: json['ticketID'] as String? ?? '',
-        eventName: json['eventName'] as String? ?? '',
-        eventDate: json['eventDate'] as String? ?? '',
-        venue: json['venue'] as String? ?? '',
-        ownerName: json['ownerName'] as String? ?? '',
-        ownerID: json['ownerID'] as String? ?? '',
-        ticketType: json['ticketType'] as String? ?? 'General',
-        price: (json['price'] as num? ?? 0).toDouble(),
-      );
+  factory TicketModel.fromJson(Map<String, dynamic> json) {
+    final type = _str(json['ticketType']);
+    return TicketModel(
+      ticketID: _str(json['ticketID']),
+      eventName: _str(json['eventName']),
+      eventDate: _str(json['eventDate']),
+      venue: _str(json['venue']),
+      ownerName: _str(json['ownerName']),
+      ownerID: _str(json['ownerID']),
+      ticketType: type.isEmpty ? 'General' : type,
+      price: _dbl(json['price']),
+    );
+  }
 
-  Map<String, dynamic> toJson() => {
+  Map<String, dynamic> toJson() => <String, dynamic>{
         'ticketID': ticketID,
         'eventName': eventName,
         'eventDate': eventDate,
@@ -71,6 +100,8 @@ class TicketModel {
       'TicketModel(id=$ticketID, event=$eventName, owner=$ownerName)';
 }
 
+// ── BlockModel ──────────────────────────────────────────────────────────────
+
 /// Mirrors the block wrapper returned by eventchain_get_chain_json.
 class BlockModel {
   final int index;
@@ -87,8 +118,15 @@ class BlockModel {
   /// sites.
   int get storageIndex => index + 1;
 
-  factory BlockModel.fromJson(Map<String, dynamic> json) => BlockModel(
-        index: json['index'] as int,
-        ticket: TicketModel.fromJson(json['ticket'] as Map<String, dynamic>),
-      );
+  factory BlockModel.fromJson(Map<String, dynamic> json) {
+    final rawTicket = json['ticket'];
+    final ticket = rawTicket is Map<String, dynamic>
+        ? TicketModel.fromJson(rawTicket)
+        : TicketModel.fromJson(const <String, dynamic>{});
+
+    return BlockModel(
+      index: _parseInt(json['index']),
+      ticket: ticket,
+    );
+  }
 }

@@ -304,9 +304,6 @@ Verified Digital Ticket Record.
       );
 
       final zipBytes = ZipEncoder().encode(archive);
-      if (zipBytes == null) {
-        throw Exception('Failed to bundle files');
-      }
 
       final tempDir = await getTemporaryDirectory();
       final zipFile = File('${tempDir.path}/ticket_$ticketId.zip');

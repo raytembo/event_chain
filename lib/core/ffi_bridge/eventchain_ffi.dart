@@ -5,6 +5,7 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:ffi/ffi.dart';
 
@@ -14,6 +15,7 @@ import '../models/ticket_model.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // Image Format Constants
 // ─────────────────────────────────────────────────────────────────────────────
+
 class ImageFormat {
   static const int png = 0;
   static const int bmp = 1;
@@ -25,6 +27,7 @@ class ImageFormat {
 // ─────────────────────────────────────────────────────────────────────────────
 // Singleton
 // ─────────────────────────────────────────────────────────────────────────────
+
 class EventChainFFI {
   EventChainFFI._();
   static final EventChainFFI instance = EventChainFFI._();
@@ -33,10 +36,26 @@ class EventChainFFI {
   late final Pointer<Void> _handle;
   bool _initialized = false;
 
+  // ── Platform-aware library name ───────────────────────────────────────────
+  //
+  // Android / Linux  →  libEventChain.so
+  // macOS            →  libEventChain.dylib
+  // Windows          →  EventChain.dll
+  //
+  // Keeping this as a static getter makes it easy to stub in tests or override
+  // for custom build flavours.
+  static String get _libName {
+    if (Platform.isAndroid || Platform.isLinux) return 'libEventChain.so';
+    if (Platform.isMacOS) return 'libEventChain.dylib';
+    if (Platform.isWindows) return 'EventChain.dll';
+    // Fallback — let the OS report a useful error rather than silently failing.
+    return 'libEventChain.so';
+  }
+
   Future<void> init(String storageFolder) async {
     if (_initialized) return;
 
-    final lib = DynamicLibrary.open('libEventChain.so');
+    final lib = DynamicLibrary.open(_libName);
     _bindings = EventChainBindings(lib);
 
     final folderPtr = storageFolder.toNativeUtf8();
@@ -63,14 +82,16 @@ class EventChainFFI {
     return s;
   }
 
-  // ── NEW: read the C thread-local last-error string (do NOT free) ──────────
+  // ── Last-error accessor (C owns this buffer — do NOT free) ────────────────
+
   String? get lastErrorMessage {
     final ptr = _bindings.lastError();
     if (ptr == nullptr) return null;
-    return ptr.toDartString(); // C owns this buffer
+    return ptr.toDartString();
   }
 
-  // ── NEW: native self-test ─────────────────────────────────────────────────
+  // ── Native self-test ──────────────────────────────────────────────────────
+
   String selfTest({required String workDir}) {
     final dirPtr = workDir.toNativeUtf8();
     try {
