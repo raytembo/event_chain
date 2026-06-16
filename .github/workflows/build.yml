@@ -1,0 +1,91 @@
+name: Build & Release EventChain APK
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    name: Build APK & Publish GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Java 17 ───────────────────────────────────────────────────────────
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ── 3. Secure Flutter 3.24.5 ──────────────────────────────────────────────
+      # This replaces the manual curl/rm steps and completely resets FLUTTER_ROOT
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: 'stable'
+          cache: true
+
+      # ── 4. Verify exact versions ──────────────────────────────────────────────
+      - name: Verify Flutter & Dart versions
+        run: |
+          flutter --version
+          dart --version
+
+      # ── 5. NDK + CMake (for libeventchain.so C++ core) ───────────────────────
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK and CMake
+        run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
+
+      # ── 6. Install dependencies ───────────────────────────────────────────────
+      - name: Install dependencies
+        run: flutter pub get
+
+      # ── 7. Build release APK ──────────────────────────────────────────────────
+      - name: Build release APK
+        run: flutter build apk --release
+
+      # ── 8. Rename APK ─────────────────────────────────────────────────────────
+      - name: Rename APK
+        run: |
+          mv build/app/outputs/flutter-apk/app-release.apk \
+             build/app/outputs/flutter-apk/eventchain-${GITHUB_REF_NAME}.apk
+
+      # ── 9. Create GitHub Release ─────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: EventChain ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body: |
+            ## 🎟️ EventChain ${{ github.ref_name }}
+
+            Secure event ticketing using DCT-QIM steganography, Fibonacci XOR encryption, and a private proof-of-work blockchain.
+
+            ### Device Requirements
+            - Android 6.0 (API 23) or higher
+            - ARMv8-A processor (physical device or ARM emulator)
+            - Minimum 2 GB RAM
+            - Camera access for gate verification
+
+            ### Installation
+            1. Download **eventchain-${{ github.ref_name }}.apk** below.
+            2. Go to **Settings → Apps → Special app access → Install unknown apps** and allow installs from your browser or file manager.
+            3. Open the downloaded APK and tap **Install**.
+
+            > ⚠️ x86 emulators are not supported. Requires an ARM device or ARM-based emulator.
+
+            ---
+            Built from tag `${{ github.ref_name }}` · Flutter 3.24.5 · Dart 3.6 · Android API 23+
+          files: build/app/outputs/flutter-apk/eventchain-${{ github.ref_name }}.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
