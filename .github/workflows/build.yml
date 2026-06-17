@@ -22,12 +22,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # ── 3. Secure Flutter 3.24.5 ──────────────────────────────────────────────
-      # This replaces the manual curl/rm steps and completely resets FLUTTER_ROOT
+      # ── 3. Secure Flutter 3.41.9 ──────────────────────────────────────────────
+      # Updated to match local development environment and satisfy Dart SDK requirements
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
+          flutter-version: '3.41.9'
           channel: 'stable'
           cache: true
 
@@ -83,7 +83,7 @@ jobs:
             > ⚠️ x86 emulators are not supported. Requires an ARM device or ARM-based emulator.
 
             ---
-            Built from tag `${{ github.ref_name }}` · Flutter 3.24.5 · Dart 3.6 · Android API 23+
+            Built from tag `${{ github.ref_name }}` · Flutter 3.41.9 · Dart 3.11 · Android API 23+
           files: build/app/outputs/flutter-apk/eventchain-${{ github.ref_name }}.apk
           draft: false
           prerelease: false
