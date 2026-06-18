@@ -68,7 +68,7 @@ jobs:
           name: EventChain ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           body: |
-            ## 🎟️ EventChain ${{ github.ref_name }}
+            ## EventChain ${{ github.ref_name }}
 
             Secure event ticketing using DCT-QIM steganography, Fibonacci XOR encryption, and a private proof-of-work blockchain.
 
@@ -83,7 +83,7 @@ jobs:
             2. Go to **Settings → Apps → Special app access → Install unknown apps** and allow installs from your browser or file manager.
             3. Open the downloaded APK and tap **Install**.
 
-            > ⚠️ x86 emulators are not supported. Requires an ARM device or ARM-based emulator.
+            > x86 emulators are not supported. Requires an ARM device or ARM-based emulator.
 
             ---
             Built from tag `${{ github.ref_name }}` · Flutter 3.41.9 · Dart 3.11 · Android API 23+

@@ -5,6 +5,8 @@
 // • List of tappable options (Profile is the main one for now)
 // • Uses same AppTheme, fonts, colors, and card style as previous pages
 
+import 'package:eventchain/features/settings/help_setting_screen.dart';
+import 'package:eventchain/features/settings/privacy_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -50,9 +52,9 @@ class SettingsScreen extends ConsumerWidget {
             title: 'Help & Support',
             subtitle: 'FAQs, contact us, or report an issue',
             onTap: () {
-              // TODO: future page
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Help & Support coming soon')),
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const HelpSupportScreen()),
               );
             },
           ),
@@ -64,9 +66,9 @@ class SettingsScreen extends ConsumerWidget {
             title: 'About EventChain',
             subtitle: 'Version • Privacy • Terms',
             onTap: () {
-              // TODO: future page
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('About page coming soon')),
+               Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AboutScreen()),
               );
             },
           ),

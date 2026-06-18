@@ -6,6 +6,10 @@
 // • Profile still navigates to the shared ProfileScreen (with owner-tailored subtitle)
 // • Other cards are owner-focused (payouts, notifications, etc.) with placeholder actions
 
+import 'package:eventchain/features/owner/owner_notification.dart';
+import 'package:eventchain/features/owner/owner_payouts.dart';
+import 'package:eventchain/features/settings/help_setting_screen.dart';
+import 'package:eventchain/features/settings/privacy_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -53,9 +57,9 @@ class SettingsScreen extends ConsumerWidget {
             subtitle:
                 'View ticket earnings, manage bank details & withdrawal requests',
             onTap: () {
-              // TODO: future owner payout screen
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Payout settings coming soon')),
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const PayoutsRevenueScreen()),
               );
             },
           ),
@@ -68,10 +72,10 @@ class SettingsScreen extends ConsumerWidget {
             subtitle:
                 'Manage alerts for new ticket sales, scans & event updates',
             onTap: () {
-              // TODO: future owner notification preferences
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text('Notification preferences coming soon')),
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const OwnerNotificationsScreen()),
               );
             },
           ),
@@ -83,9 +87,9 @@ class SettingsScreen extends ConsumerWidget {
             title: 'Help & Support',
             subtitle: 'FAQs, contact us, or report an issue',
             onTap: () {
-              // TODO: future page
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Help & Support coming soon')),
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const HelpSupportScreen()),
               );
             },
           ),
@@ -97,9 +101,9 @@ class SettingsScreen extends ConsumerWidget {
             title: 'About EventChain',
             subtitle: 'Version • Privacy • Terms',
             onTap: () {
-              // TODO: future page
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('About page coming soon')),
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AboutScreen()),
               );
             },
           ),
