@@ -1,6 +1,6 @@
 // lib/core/models/user_model.dart
 
-enum UserRole { owner, customer }
+enum UserRole { owner, customer, verifier }
 
 class AppUser {
   final String id;
@@ -29,9 +29,11 @@ class AppUser {
         id: map['id'] as String,
         email: map['email'] as String,
         displayName: map['display_name'] as String,
-        role: (map['role'] as String) == 'owner'
-            ? UserRole.owner
-            : UserRole.customer,
+        role: switch (map['role'] as String) {
+          'owner' => UserRole.owner,
+          'verifier' => UserRole.verifier,
+          _ => UserRole.customer, // Safe default fallback
+        },
         phone: map['phone'] as String?,
         avatarUrl: map['avatar_url'] as String?,
         bio: map['bio'] as String?,

@@ -6,6 +6,7 @@
 // • Profile still navigates to the shared ProfileScreen (with owner-tailored subtitle)
 // • Other cards are owner-focused (payouts, notifications, etc.) with placeholder actions
 
+import 'package:eventchain/features/owner/manage_verifiers_screen.dart'; // NEW IMPORT
 import 'package:eventchain/features/owner/owner_notification.dart';
 import 'package:eventchain/features/owner/owner_payouts.dart';
 import 'package:eventchain/features/settings/help_setting_screen.dart';
@@ -76,6 +77,22 @@ class SettingsScreen extends ConsumerWidget {
                 context,
                 MaterialPageRoute(
                     builder: (_) => const OwnerNotificationsScreen()),
+              );
+            },
+          ),
+
+          const SizedBox(height: 12),
+
+          // ── NEW: Manage Verifiers Card ────────────────────────────────
+          _SettingsCard(
+            icon: Icons.badge_outlined,
+            title: 'Manage Verifiers',
+            subtitle: 'Authorize staff to scan tickets at your events',
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const ManageVerifiersScreen()),
               );
             },
           ),

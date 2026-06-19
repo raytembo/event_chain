@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:eventchain/features/scanner/verifier_dashboard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
@@ -54,10 +55,6 @@ class _EventChainAppState extends State<EventChainApp> {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// TEMPORARY DEBUG WIDGET — tap the red bug button to run the native self-test
-// ═════════════════════════════════════════════════════════════════════════════
-
-// ═════════════════════════════════════════════════════════════════════════════
 // AUTH ROUTER
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -69,9 +66,9 @@ class _AuthRouter extends ConsumerWidget {
     final auth = ref.watch(authProvider);
 
     if (!auth.isLoggedIn && auth.loading) {
-      return const Scaffold(
-        backgroundColor: Color(0xFF0D1117),
-        body: Center(
+      return Scaffold(
+        backgroundColor: AppTheme.dark().scaffoldBackgroundColor,
+        body: const Center(
           child: CircularProgressIndicator(color: AppTheme.primaryColor),
         ),
       );
@@ -79,9 +76,12 @@ class _AuthRouter extends ConsumerWidget {
 
     if (!auth.isLoggedIn) return const LoginScreen();
 
+    // Route dynamically based on the decoded profile role
     return switch (auth.role) {
       UserRole.owner => const OwnerRootScaffold(),
       UserRole.customer => const CustomerRootScaffold(),
+      UserRole.verifier =>
+        const VerifierDashboardScreen(), // NEW: Verifier routing
       _ => const LoginScreen(),
     };
   }

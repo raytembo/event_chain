@@ -1,7 +1,7 @@
 // lib/core/services/supabase_service.dart
 //
 // Singleton wrapper around the Supabase client.
-// Covers: Auth, Profiles, Events, Event Ticket Types, Tickets, Payments.
+// Covers: Auth, Profiles, Events, Event Ticket Types, Tickets, Payments, Gate Verifiers.
 //
 // Call SupabaseService.init() once from main() before runApp().
 
@@ -40,10 +40,9 @@ class SupabaseService {
       client.from('event_ticket_types');
   SupabaseQueryBuilder get tickets => client.from('tickets');
   SupabaseQueryBuilder get payments => client.from('payments');
+  SupabaseQueryBuilder get gateVerifiers => client.from('gate_verifiers');
 
   /// Full ticket rows joined with event columns.
-  /// Use this everywhere you need eventName / venue / eventDate / posterUrl
-  /// on a ticket — avoids duplicating event columns in the tickets table.
   SupabaseQueryBuilder get ticketDetail => client.from('v_ticket_detail');
 
   /// Per-event sold / available summary — useful for owner dashboards.
@@ -54,8 +53,6 @@ class SupabaseService {
   // AUTH
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Sign up a new user.  [role] is stored in raw_user_meta_data so the
-  /// handle_new_user trigger can write the correct role into profiles.
   Future<AuthResponse> signUp({
     required String email,
     required String password,
@@ -67,7 +64,7 @@ class SupabaseService {
         password: password,
         data: {
           'full_name': displayName,
-          'role': role.name, // 'owner' | 'customer'
+          'role': role.name, // 'owner' | 'customer' | 'verifier'
         },
       );
 
@@ -83,7 +80,6 @@ class SupabaseService {
   // PROFILES
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Fetch the profile for the currently signed-in user.
   Future<AppUser?> fetchCurrentUser() async {
     final uid = currentUserId;
     if (uid == null) return null;
@@ -96,7 +92,6 @@ class SupabaseService {
     }
   }
 
-  /// Fetch any user's public profile by UUID.
   Future<AppUser?> fetchUserById(String userId) async {
     try {
       final row = await profiles.select().eq('id', userId).single();
@@ -107,8 +102,6 @@ class SupabaseService {
     }
   }
 
-  /// Update mutable profile fields for the current user.
-  /// Only pass the fields you want to change.
   Future<bool> updateProfile({
     String? displayName,
     String? phone,
@@ -123,7 +116,6 @@ class SupabaseService {
       if (phone != null) 'phone': phone,
       if (avatarUrl != null) 'avatar_url': avatarUrl,
       if (bio != null) 'bio': bio,
-      // updated_at is handled automatically by the trg_profiles_updated_at trigger
     };
     if (updates.isEmpty) return true;
 
@@ -140,7 +132,6 @@ class SupabaseService {
   // EVENTS
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Fetch all public events (or all events the current user owns).
   Future<List<Map<String, dynamic>>> fetchPublicEvents() async {
     try {
       return await events
@@ -153,7 +144,6 @@ class SupabaseService {
     }
   }
 
-  /// Fetch events owned by the current user.
   Future<List<Map<String, dynamic>>> fetchMyEvents() async {
     final uid = currentUserId;
     if (uid == null) return [];
@@ -168,7 +158,6 @@ class SupabaseService {
     }
   }
 
-  /// Fetch a single event by its UUID.
   Future<Map<String, dynamic>?> fetchEventById(String eventId) async {
     try {
       return await events.select().eq('id', eventId).single();
@@ -178,8 +167,6 @@ class SupabaseService {
     }
   }
 
-  /// Create a new event.  Returns the new row (including the generated id),
-  /// or null on failure.
   Future<Map<String, dynamic>?> createEvent({
     required String eventName,
     String? description,
@@ -216,7 +203,6 @@ class SupabaseService {
     }
   }
 
-  /// Update mutable event fields.  Only pass the fields you want to change.
   Future<bool> updateEvent(
     String eventId, {
     String? eventName,
@@ -262,10 +248,8 @@ class SupabaseService {
 
   // ══════════════════════════════════════════════════════════════════════════
   // EVENT TICKET TYPES
-  // Prices and capacities per ticket category per event.
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Fetch all ticket-type rows for a given event.
   Future<List<Map<String, dynamic>>> fetchTicketTypes(String eventId) async {
     try {
       return await eventTicketTypes.select().eq('event_id', eventId);
@@ -275,8 +259,6 @@ class SupabaseService {
     }
   }
 
-  /// Upsert a ticket-type row.
-  /// Uses the (event_id, ticket_type) unique constraint for the upsert target.
   Future<bool> upsertTicketType({
     required String eventId,
     required TicketType ticketType,
@@ -304,11 +286,6 @@ class SupabaseService {
   // TICKETS
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Insert a new ticket row after the blockchain block has been added.
-  ///
-  /// [blockIndex] is the 0-based index from the C++ chain.
-  /// The quantity_sold counter is updated automatically by the
-  /// trg_ticket_quantity trigger — do NOT increment it manually.
   Future<TicketRecord?> insertTicket({
     required String ticketId,
     required int blockIndex,
@@ -342,10 +319,8 @@ class SupabaseService {
     }
   }
 
-  /// Attach (or update) the stego_url on an existing ticket after the PNG has
-  /// been uploaded to Storage.
   Future<bool> updateStegoUrl({
-    required String ticketId, // the UUID primary key (tickets.id)
+    required String ticketId,
     required String stegoUrl,
   }) async {
     try {
@@ -357,8 +332,6 @@ class SupabaseService {
     }
   }
 
-  /// Fetch all active (non-deleted) tickets owned by the current user,
-  /// with event fields joined via v_ticket_detail.
   Future<List<TicketRecord>> fetchMyTickets() async {
     final uid = currentUserId;
     if (uid == null) return [];
@@ -371,7 +344,6 @@ class SupabaseService {
     }
   }
 
-  /// Fetch all active tickets for an event (event-owner view).
   Future<List<TicketRecord>> fetchTicketsForEvent(String eventId) async {
     try {
       final rows = await ticketDetail.select().eq('event_id', eventId);
@@ -382,7 +354,6 @@ class SupabaseService {
     }
   }
 
-  /// Fetch a single ticket by its Supabase UUID, with event fields joined.
   Future<TicketRecord?> fetchTicketById(String id) async {
     try {
       final row = await ticketDetail.select().eq('id', id).single();
@@ -393,13 +364,9 @@ class SupabaseService {
     }
   }
 
-  /// Transfer a ticket to a new owner.
-  ///
-  /// Call AFTER EventChainFFI.transferOwnership() has succeeded so the
-  /// blockchain and database stay in sync.
   Future<bool> transferTicket({
-    required String ticketId, // UUID primary key (tickets.id)
-    required String newOwnerId, // auth.users UUID of the buyer
+    required String ticketId,
+    required String newOwnerId,
     required String newOwnerName,
     String? buyerEmail,
     String? buyerPhone,
@@ -421,10 +388,6 @@ class SupabaseService {
     }
   }
 
-  /// Soft-delete a ticket (cancelled / refunded).
-  ///
-  /// Sets deleted_at — the trg_ticket_quantity trigger automatically
-  /// decrements quantity_sold on event_ticket_types.
   Future<bool> softDeleteTicket(String ticketId) async {
     try {
       await tickets.update({'deleted_at': DateTime.now().toIso8601String()}).eq(
@@ -440,7 +403,6 @@ class SupabaseService {
   // PAYMENTS
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Record a new payment for a ticket purchase.
   Future<Map<String, dynamic>?> insertPayment({
     required String ticketId,
     required String eventId,
@@ -448,7 +410,7 @@ class SupabaseService {
     required String buyerName,
     required String buyerEmail,
     String? buyerPhone,
-    String? paymentMethod, // matches payment_method enum values
+    String? paymentMethod,
     String? cardLastFour,
     String? cardBrand,
     String? transactionReference,
@@ -482,11 +444,9 @@ class SupabaseService {
     }
   }
 
-  /// Update a payment's status (e.g. pending → completed).
   Future<bool> updatePaymentStatus({
     required String paymentId,
-    required String
-        status, // 'pending' | 'processing' | 'completed' | 'failed' | 'refunded'
+    required String status,
     String? failureReason,
   }) async {
     try {
@@ -502,7 +462,6 @@ class SupabaseService {
     }
   }
 
-  /// Fetch all payments made by the current user.
   Future<List<Map<String, dynamic>>> fetchMyPayments() async {
     final uid = currentUserId;
     if (uid == null) return [];
@@ -517,7 +476,6 @@ class SupabaseService {
     }
   }
 
-  /// Fetch all payments for an event (event-owner view).
   Future<List<Map<String, dynamic>>> fetchPaymentsForEvent(
       String eventId) async {
     try {
@@ -528,6 +486,171 @@ class SupabaseService {
     } on PostgrestException catch (e) {
       debugPrint('❌ fetchPaymentsForEvent($eventId): ${e.message}');
       return [];
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // GATE VERIFIERS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /// Fetch all verifiers invited by the current owner, joining event names.
+  Future<List<Map<String, dynamic>>> fetchAllGateVerifiers() async {
+    final uid = currentUserId;
+    if (uid == null) return [];
+    try {
+      return await client
+          .from('gate_verifiers')
+          .select('*, events(event_name)')
+          .eq('owner_id', uid);
+    } on PostgrestException catch (e) {
+      debugPrint('❌ fetchAllGateVerifiers: ${e.message}');
+      return [];
+    }
+  }
+
+  /// Invite (create) a gate verifier account on the owner's behalf.
+  ///
+  /// This actually provisions a Supabase Auth user with role = 'verifier'
+  /// — the previous version only staged a row in gate_verifiers and never
+  /// created real credentials, so invited verifiers had nothing to log in
+  /// with. [displayName], [phone], [bio], and [avatarUrl] mirror the
+  /// optional profile fields on the public register screen.
+  ///
+  /// auth.signUp() switches the client's active session to the newly
+  /// created verifier, so the owner's session is snapshotted first and
+  /// restored in `finally`, before gate_verifiers is touched (its RLS
+  /// policy expects owner_id == auth.uid()).
+  ///
+  /// Limitation: this blocks re-inviting an email that's already on this
+  /// owner's gate_verifiers list (see the pre-check below), but doesn't yet
+  /// support attaching an *existing* verifier account to a second event —
+  /// that needs a lookup that isn't blocked by profiles RLS (e.g. a small
+  /// Postgres function), which isn't wired up here.
+  Future<Map<String, dynamic>?> inviteGateVerifier({
+    required String verifierEmail,
+    required String password,
+    String? eventId,
+    String? displayName,
+    String? phone,
+    String? bio,
+    String? avatarUrl,
+  }) async {
+    final uid = currentUserId;
+    if (uid == null) return null;
+
+    final normalisedEmail = verifierEmail.trim().toLowerCase();
+    final ownerSession = auth.currentSession;
+
+    // Block duplicate invites for this owner + email before creating any
+    // Auth account.
+    final existingInvite = await client
+        .from('gate_verifiers')
+        .select('id')
+        .eq('owner_id', uid)
+        .eq('verifier_email', normalisedEmail)
+        .maybeSingle();
+    if (existingInvite != null) {
+      debugPrint('❌ inviteGateVerifier: $normalisedEmail already invited');
+      return null;
+    }
+
+    String? verifierId;
+    try {
+      final response = await signUp(
+        email: normalisedEmail,
+        password: password,
+        displayName: (displayName != null && displayName.trim().isNotEmpty)
+            ? displayName.trim()
+            : normalisedEmail,
+        role: UserRole.verifier,
+      );
+
+      verifierId = response.user?.id;
+      if (verifierId == null) {
+        debugPrint('❌ inviteGateVerifier: signUp returned no user');
+        return null;
+      }
+
+      // Still signed in as the new verifier here, so this is just like the
+      // follow-up update in AuthNotifier.register().
+      final extras = <String, dynamic>{
+        if (phone != null && phone.trim().isNotEmpty) 'phone': phone.trim(),
+        if (bio != null && bio.trim().isNotEmpty) 'bio': bio.trim(),
+        if (avatarUrl != null && avatarUrl.trim().isNotEmpty)
+          'avatar_url': avatarUrl.trim(),
+      };
+      if (extras.isNotEmpty) {
+        await profiles.update(extras).eq('id', verifierId);
+      }
+    } on AuthException catch (e) {
+      debugPrint('❌ inviteGateVerifier auth error: ${e.message}');
+      return null;
+    } catch (e) {
+      debugPrint('❌ inviteGateVerifier unexpected error: $e');
+      return null;
+    } finally {
+      // Always hand the session back to the owner, success or failure.
+      if (ownerSession != null) {
+        await auth.setSession(ownerSession.refreshToken!);
+      }
+    }
+
+    try {
+      final row = await client
+          .from('gate_verifiers')
+          .insert({
+            'owner_id': uid,
+            'verifier_id': verifierId,
+            'verifier_email': normalisedEmail,
+            'setup_password': password,
+            'event_id': eventId,
+            'status': 'active',
+            if (displayName != null) 'verifier_name': displayName,
+            if (phone != null) 'verifier_phone': phone,
+            if (bio != null) 'verifier_bio': bio,
+            if (avatarUrl != null) 'verifier_avatar_url': avatarUrl,
+          })
+          .select()
+          .single();
+      return row;
+    } on PostgrestException catch (e) {
+      debugPrint(
+          '❌ inviteGateVerifier database error: ${e.message} | Details: ${e.details}');
+      return null;
+    }
+  }
+
+  Future<bool> revokeGateVerifier(String id) async {
+    try {
+      await client
+          .from('gate_verifiers')
+          .update({'status': 'revoked'}).eq('id', id);
+      return true;
+    } on PostgrestException catch (e) {
+      debugPrint('❌ revokeGateVerifier: ${e.message}');
+      return false;
+    }
+  }
+
+  Future<bool> reactivateGateVerifier(String id) async {
+    try {
+      await client
+          .from('gate_verifiers')
+          .update({'status': 'active'}).eq('id', id);
+      return true;
+    } on PostgrestException catch (e) {
+      debugPrint('❌ reactivateGateVerifier: ${e.message}');
+      return false;
+    }
+  }
+
+  Future<bool> deleteGateVerifier(String id) async {
+    try {
+      await client.from('gate_verifiers').delete().eq('id', id);
+      return true;
+    } on PostgrestException catch (e) {
+      debugPrint('❌ deleteGateVerifier: ${e.message}');
+      return false;
     }
   }
 }
