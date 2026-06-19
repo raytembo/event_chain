@@ -118,6 +118,88 @@ class EventsNotifier extends Notifier<EventsState> {
     }
   }
 
+  // ── Full sync (all events, not just one) ────────────────────────────────────
+
+  Future<void>? _fullSyncFuture;
+
+  /// Downloads/refreshes every event chain from Supabase to the local
+  /// device, not just the ones already known locally.
+  ///
+  /// Intended to be called when a screen that needs up-to-date chain data
+  /// is opened (e.g. the scanner or verifier dashboard) — it runs in the
+  /// background and updates [state] as it goes, so widgets watching
+  /// [eventsProvider] can show sync progress without blocking navigation.
+  ///
+  /// If a sync is already in flight, this returns the *same* future
+  /// instead of starting a duplicate one — so callers can safely await it
+  /// without triggering a second pass over every event.
+  Future<void> syncAllEvents({bool force = false}) {
+    if (_fullSyncFuture != null && !force) return _fullSyncFuture!;
+    final future = _runFullSync();
+    _fullSyncFuture = future;
+    future.whenComplete(() => _fullSyncFuture = null);
+    return future;
+  }
+
+  Future<void> _runFullSync() async {
+    state = state.copyWith(loading: true, clearMessage: true);
+
+    try {
+      final remoteNames = await _fetchAllRemoteEventNames();
+
+      if (remoteNames.isEmpty) {
+        refresh();
+        return;
+      }
+
+      // Download in small concurrent batches so we don't open dozens of
+      // simultaneous Storage connections in a single sync pass.
+      const batchSize = 4;
+      for (var i = 0; i < remoteNames.length; i += batchSize) {
+        final batch = remoteNames.skip(i).take(batchSize);
+        await Future.wait(batch.map(loadRemoteChain));
+      }
+
+      refresh();
+    } catch (e, stack) {
+      debugPrint('❌ syncAllEvents failed: $e\n$stack');
+      state = state.copyWith(
+        loading: false,
+        message: 'Could not sync the latest events. Check your connection.',
+      );
+    }
+  }
+
+  /// Pages through the `events` table to collect every event name.
+  ///
+  /// Uses `.range()` instead of `.limit()` so this scales past 50+ events
+  /// instead of silently dropping anything beyond the first page (the bug
+  /// in the scanner's old inline download logic).
+  Future<List<String>> _fetchAllRemoteEventNames() async {
+    final names = <String>[];
+    const pageSize = 200;
+    var from = 0;
+
+    while (true) {
+      final rows = await _svc.events
+          .select('event_name')
+          .range(from, from + pageSize - 1);
+
+      final batch = List<Map<String, dynamic>>.from(rows);
+      if (batch.isEmpty) break;
+
+      for (final row in batch) {
+        final name = row['event_name'] as String?;
+        if (name != null && name.isNotEmpty) names.add(name);
+      }
+
+      if (batch.length < pageSize) break; // last page
+      from += pageSize;
+    }
+
+    return names;
+  }
+
   // ── Ticket prices & capacity ───────────────────────────────────────────────
 
   Future<Map<String, double>> getTicketPrices(String eventId) async {

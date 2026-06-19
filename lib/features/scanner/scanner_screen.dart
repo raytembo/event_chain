@@ -81,6 +81,21 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   final Map<int, String> _incomingFileUris = {};
 
   @override
+  void initState() {
+    super.initState();
+    // Kick off a background sync the moment this screen opens, so the
+    // verifier always has the latest event chains downloaded to the
+    // device without needing to scan a ticket first. This runs after the
+    // first frame so it never blocks the screen transition, and it's
+    // safe to call even if chains are already present locally — it just
+    // re-downloads anything that's changed.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(eventsProvider.notifier).syncAllEvents();
+    });
+  }
+
+  @override
   void dispose() {
     if (_isAdvertising) {
       Nearby().stopAdvertising();
@@ -571,22 +586,13 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   // ── Chain download & Supabase ─────────────────────────────────────────
   Future<List<String>> _tryDownloadChains() async {
     try {
-      final supabase = Supabase.instance.client;
-      final rows =
-          await supabase.from('events').select('id, event_name').limit(50);
+      // Reuses the same full sync the screen already kicked off in
+      // initState. If that sync is still running, this just waits on it
+      // (syncAllEvents is a no-op re-entry guard, not a duplicate fetch);
+      // if it already finished, this re-syncs to pick up anything new.
+      await ref.read(eventsProvider.notifier).syncAllEvents();
 
       if (!mounted) return [];
-
-      final notifier = ref.read(eventsProvider.notifier);
-      final events = List<Map<String, dynamic>>.from(rows);
-
-      final chunks = _chunk(events, 4);
-      for (final chunk in chunks) {
-        await Future.wait(chunk.map((row) async {
-          final name = row['event_name'] as String?;
-          if (name != null) await notifier.loadRemoteChain(name);
-        }));
-      }
 
       return EventChainFFI.instance.listEvents();
     } catch (e) {
@@ -595,11 +601,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       return [];
     }
   }
-
-  List<List<T>> _chunk<T>(List<T> list, int size) => [
-        for (int i = 0; i < list.length; i += size)
-          list.sublist(i, (i + size < list.length) ? i + size : list.length),
-      ];
 
   Future<Map<String, dynamic>?> _supabaseLookupByBlock(
     String eventName,
@@ -636,6 +637,63 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   }
 
   // ── UI ────────────────────────────────────────────────────────────────
+
+  /// Small status strip showing background sync progress / errors.
+  /// Watches [eventsProvider] so it updates live as chains download.
+  Widget _buildSyncBanner() {
+    final eventsState = ref.watch(eventsProvider);
+    final isSyncing = eventsState.loading || eventsState.syncing.isNotEmpty;
+
+    if (!isSyncing && eventsState.message == null) {
+      return const SizedBox.shrink();
+    }
+
+    final isError = !isSyncing && eventsState.message != null;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      color: isError
+          ? AppTheme.tamperedColor.withValues(alpha: 0.15)
+          : AppTheme.primaryColor.withValues(alpha: 0.12),
+      child: Row(
+        children: [
+          if (isSyncing)
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppTheme.primaryColor,
+              ),
+            )
+          else
+            Icon(Icons.error_outline, size: 16, color: AppTheme.tamperedColor),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              isSyncing
+                  ? (eventsState.syncing.isNotEmpty
+                      ? 'Syncing ${eventsState.syncing.length} event(s) to this device…'
+                      : 'Syncing latest event data…')
+                  : eventsState.message!,
+              style: AppTheme.sans(
+                fontSize: 12,
+                color: isError ? AppTheme.tamperedColor : Colors.white,
+              ),
+            ),
+          ),
+          if (isError)
+            TextButton(
+              onPressed: () =>
+                  ref.read(eventsProvider.notifier).syncAllEvents(force: true),
+              child: Text('Retry', style: AppTheme.sans(fontSize: 12)),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -654,9 +712,16 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             )
         ],
       ),
-      body: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 300),
-        child: _scanning ? _buildScanning() : _buildIdle(),
+      body: Column(
+        children: [
+          _buildSyncBanner(),
+          Expanded(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              child: _scanning ? _buildScanning() : _buildIdle(),
+            ),
+          ),
+        ],
       ),
     );
   }
