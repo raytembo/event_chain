@@ -66,6 +66,7 @@ dependencies:
   geolocator: ^12.0.0
   gal: ^2.3.2
   receive_sharing_intent: ^1.8.0
+  http: ^1.6.0
 
 
 dev_dependencies:

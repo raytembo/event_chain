@@ -120,7 +120,7 @@ class _OwnerNotificationsScreenState extends State<OwnerNotificationsScreen> {
           const SizedBox(width: 16),
           Switch.adaptive(
             value: value,
-            activeColor: AppTheme.primaryColor,
+            activeThumbColor: AppTheme.primaryColor,
             activeTrackColor: AppTheme.primaryColor.withValues(alpha: 0.2),
             onChanged: onChanged,
           ),

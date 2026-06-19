@@ -243,7 +243,7 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: themeColor.withOpacity(0.1),
+                    color: themeColor.withValues(alpha: 0.1),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
@@ -755,11 +755,11 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
+        const Row(
           children: [
-            const _SectionLabel('Card Details'),
-            const SizedBox(width: 6),
-            const Icon(Icons.lock_outline,
+            _SectionLabel('Card Details'),
+            SizedBox(width: 6),
+            Icon(Icons.lock_outline,
                 size: 12, color: AppTheme.subTextColor),
           ],
         ),
@@ -834,11 +834,11 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
+        const Row(
           children: [
-            const _SectionLabel('Mobile Wallet Account'),
-            const SizedBox(width: 6),
-            const Icon(Icons.security_rounded,
+            _SectionLabel('Mobile Wallet Account'),
+            SizedBox(width: 6),
+            Icon(Icons.security_rounded,
                 size: 12, color: AppTheme.subTextColor),
           ],
         ),

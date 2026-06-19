@@ -93,7 +93,8 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
               ),
             )
           else
-            Icon(Icons.error_outline, size: 16, color: AppTheme.tamperedColor),
+            const Icon(Icons.error_outline,
+                size: 16, color: AppTheme.tamperedColor),
           const SizedBox(width: 10),
           Expanded(
             child: Text(

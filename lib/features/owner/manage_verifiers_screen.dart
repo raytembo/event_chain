@@ -640,7 +640,7 @@ class _ManageVerifiersScreenState extends ConsumerState<ManageVerifiersScreen> {
             ),
           ),
           PopupMenuButton<String>(
-            icon: Icon(Icons.more_vert_rounded, color: AppTheme.subTextColor),
+            icon: const Icon(Icons.more_vert_rounded, color: AppTheme.subTextColor),
             color: AppTheme.cardColor,
             onSelected: (action) async {
               final notifier = ref.read(gateVerifiersProvider.notifier);

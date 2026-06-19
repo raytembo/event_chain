@@ -87,6 +87,7 @@ class VerifierDashboardScreen extends ConsumerWidget {
       ),
       body: RefreshIndicator(
         onRefresh: () async {
+          // ignore: unused_result
           await ref.refresh(verifierAssignedEventsProvider.future);
         },
         child: ListView(

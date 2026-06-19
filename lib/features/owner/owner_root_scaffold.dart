@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../events/events_screen.dart';
 import '../scanner/scanner_screen.dart';
-import 'attendee_export_screen.dart';
 import 'settings_screen_owner.dart'; // ← New settings screen
 import '../auth/auth_provider.dart';
 import '../../shared/theme/app_theme.dart'; // ← Updated import to use shared AppTheme
