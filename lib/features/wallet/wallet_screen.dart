@@ -20,6 +20,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../shared/theme/app_theme.dart';
 import '../../shared/utilities/currency_formatter.dart';
 import '../auth/auth_provider.dart';
+import '../events/events_provider.dart';
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 
@@ -41,11 +42,85 @@ final myTicketsProvider =
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
-class WalletScreen extends ConsumerWidget {
+class WalletScreen extends ConsumerStatefulWidget {
   const WalletScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<WalletScreen> createState() => _WalletScreenState();
+}
+
+class _WalletScreenState extends ConsumerState<WalletScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Kick off a background sync the moment the wallet opens, so the
+    // customer's device has the latest event chain data downloaded
+    // locally — mirrors the same trigger used in ScannerScreen. Runs
+    // after the first frame so it never blocks the screen transition.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(eventsProvider.notifier).syncAllEvents();
+    });
+  }
+
+  /// Small status strip showing background sync progress / errors.
+  /// Watches [eventsProvider] so it updates live as chains download.
+  Widget _buildSyncBanner() {
+    final eventsState = ref.watch(eventsProvider);
+    final isSyncing = eventsState.loading || eventsState.syncing.isNotEmpty;
+
+    if (!isSyncing && eventsState.message == null) {
+      return const SizedBox.shrink();
+    }
+
+    final isError = !isSyncing && eventsState.message != null;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      color: isError
+          ? AppTheme.tamperedColor.withValues(alpha: 0.15)
+          : AppTheme.primaryColor.withValues(alpha: 0.12),
+      child: Row(
+        children: [
+          if (isSyncing)
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppTheme.primaryColor,
+              ),
+            )
+          else
+            Icon(Icons.error_outline, size: 16, color: AppTheme.tamperedColor),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              isSyncing
+                  ? (eventsState.syncing.isNotEmpty
+                      ? 'Syncing…'
+                      : 'Syncing latest event data…')
+                  : eventsState.message!,
+              style: AppTheme.sans(
+                fontSize: 12,
+                color: isError ? AppTheme.tamperedColor : Colors.white,
+              ),
+            ),
+          ),
+          if (isError)
+            TextButton(
+              onPressed: () =>
+                  ref.read(eventsProvider.notifier).syncAllEvents(force: true),
+              child: Text('Retry', style: AppTheme.sans(fontSize: 12)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final ticketsAsync = ref.watch(myTicketsProvider);
 
     return Scaffold(
@@ -63,27 +138,35 @@ class WalletScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: ticketsAsync.when(
-        loading: () => const Center(
-          child: CircularProgressIndicator(color: AppTheme.primaryColor),
-        ),
-        error: (err, _) => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'Error loading tickets:\n$err',
-              textAlign: TextAlign.center,
-              style: AppTheme.sans(color: AppTheme.tamperedColor),
+      body: Column(
+        children: [
+          _buildSyncBanner(),
+          Expanded(
+            child: ticketsAsync.when(
+              loading: () => const Center(
+                child: CircularProgressIndicator(color: AppTheme.primaryColor),
+              ),
+              error: (err, _) => Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    'Error loading tickets:\n$err',
+                    textAlign: TextAlign.center,
+                    style: AppTheme.sans(color: AppTheme.tamperedColor),
+                  ),
+                ),
+              ),
+              data: (payments) => payments.isEmpty
+                  ? const _EmptyState()
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: payments.length,
+                      itemBuilder: (ctx, i) =>
+                          _WalletCard(payment: payments[i]),
+                    ),
             ),
           ),
-        ),
-        data: (payments) => payments.isEmpty
-            ? const _EmptyState()
-            : ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: payments.length,
-                itemBuilder: (ctx, i) => _WalletCard(payment: payments[i]),
-              ),
+        ],
       ),
     );
   }
