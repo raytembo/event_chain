@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+//import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/models/ticket_record.dart';
 import '../../core/services/supabase_service.dart';
@@ -209,13 +209,15 @@ class _EventsScreenState extends ConsumerState<EventsScreen> {
         duration: Duration(seconds: 3),
       ));
 
-      // ── Step 1: Delete DB rows via RPC ──────────────────────────────────────
-      // The RPC runs as SECURITY DEFINER so it bypasses RLS on the tickets
-      // table — this was the root cause of the silent-fail / FK violation.
-      await svc.client.rpc(
-        'delete_event_cascade',
-        params: {'p_event_id': eventId},
-      );
+      // ── Step 1: Delete DB rows via the service layer ────────────────────
+      // deleteEvent() calls the delete_event_cascade RPC (SECURITY DEFINER),
+      // which removes payments, tickets, event_ticket_types, and
+      // gate_verifiers scoped to this event before deleting the event row
+      // itself — avoiding the FK violation a plain .delete() would hit.
+      final dbDeleted = await svc.deleteEvent(eventId);
+      if (!dbDeleted) {
+        throw Exception('Could not delete this event. Please try again.');
+      }
 
       // ── Step 2: Clean up cloud storage assets ───────────────────────────────
       await SupabaseStorageService.instance.deleteAllAssetsForEvent(
@@ -231,16 +233,6 @@ class _EventsScreenState extends ConsumerState<EventsScreen> {
         content:
             Text('Event removed.', style: AppTheme.sans(color: Colors.black)),
         backgroundColor: AppTheme.authenticColor,
-        behavior: SnackBarBehavior.floating,
-      ));
-    } on PostgrestException catch (e) {
-      scaffold.hideCurrentSnackBar();
-      scaffold.showSnackBar(SnackBar(
-        content: Text(
-          'Could not delete event: ${e.message}',
-          style: AppTheme.sans(color: Colors.white),
-        ),
-        backgroundColor: AppTheme.tamperedColor,
         behavior: SnackBarBehavior.floating,
       ));
     } catch (e) {
@@ -619,7 +611,7 @@ class _EventFormSheetState extends ConsumerState<_EventFormSheet> {
     final svc = SupabaseService.instance;
 
     try {
-      final dateIso = _eventDate!.toUtc().toIso8601String();
+      //final dateIso = _eventDate!.toUtc().toIso8601String();
 
       if (_isEdit) {
         // ── Update existing event ──────────────────────────────────────────

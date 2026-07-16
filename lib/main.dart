@@ -10,6 +10,7 @@ import 'core/services/supabase_service.dart';
 import 'shared/theme/app_theme.dart';
 import 'features/auth/auth_provider.dart';
 import 'features/auth/login_screen.dart';
+import 'features/auth/register_screen.dart';
 import 'features/owner/owner_root_scaffold.dart';
 import 'features/customer/customer_root_scaffold.dart';
 
@@ -57,6 +58,17 @@ class _EventChainAppState extends State<EventChainApp> {
 // ═════════════════════════════════════════════════════════════════════════════
 // AUTH ROUTER
 // ═════════════════════════════════════════════════════════════════════════════
+//
+// _AuthRouter must stay mounted for the entire time the user is logged out —
+// this is the widget that watches authProvider and swaps to the correct root
+// scaffold the instant login()/register() sets a user. Previously, the login
+// and register screens used Navigator.pushReplacement on each other, which
+// replaced _AuthRouter's own route and removed it from the tree entirely —
+// after that, nothing was left listening for the auth state change, so the
+// redirect silently failed until the next hot reload/restart remounted
+// _AuthRouter fresh. _AuthGate below fixes this by toggling between login
+// and register via local setState, so _AuthRouter (and its watch) never
+// leaves the widget tree.
 
 class _AuthRouter extends ConsumerWidget {
   const _AuthRouter();
@@ -74,7 +86,7 @@ class _AuthRouter extends ConsumerWidget {
       );
     }
 
-    if (!auth.isLoggedIn) return const LoginScreen();
+    if (!auth.isLoggedIn) return const _AuthGate();
 
     // Route dynamically based on the decoded profile role
     return switch (auth.role) {
@@ -82,7 +94,33 @@ class _AuthRouter extends ConsumerWidget {
       UserRole.customer => const CustomerRootScaffold(),
       UserRole.verifier =>
         const VerifierDashboardScreen(), // NEW: Verifier routing
-      _ => const LoginScreen(),
+      _ => const _AuthGate(),
     };
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// AUTH GATE — swaps login/register in place, no Navigator involved
+// ═════════════════════════════════════════════════════════════════════════════
+
+class _AuthGate extends StatefulWidget {
+  const _AuthGate();
+
+  @override
+  State<_AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<_AuthGate> {
+  bool _showRegister = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return _showRegister
+        ? RegisterScreen(
+            onBackToLogin: () => setState(() => _showRegister = false),
+          )
+        : LoginScreen(
+            onRegisterTap: () => setState(() => _showRegister = true),
+          );
   }
 }

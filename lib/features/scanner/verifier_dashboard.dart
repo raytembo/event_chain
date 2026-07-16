@@ -239,11 +239,11 @@ class VerifierDashboardScreen extends ConsumerWidget {
   }
 
   void _launchScanner(BuildContext context, List<Map<String, dynamic>> events) {
-    final eventNames = events
+    /*final eventNames = events
         .map((e) => e['event_name'] as String?)
         .whereType<String>()
         .toList();
-
+    */
     Navigator.push(
       context,
       MaterialPageRoute(

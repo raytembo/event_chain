@@ -236,9 +236,31 @@ class SupabaseService {
     }
   }
 
+  /// Deletes an event and everything that depends on it — ticket types,
+  /// tickets, payments, and gate verifier assignments scoped to that event —
+  /// via the delete_event_cascade RPC (SECURITY DEFINER, so it bypasses RLS
+  /// on the child tables it touches).
+  ///
+  /// A plain `.delete()` here would throw a foreign key violation the moment
+  /// the event has any ticket types, tickets, or payments attached, since
+  /// none of the schema's FKs are declared ON DELETE CASCADE. This method
+  /// only touches rows scoped to this one event_id — other events, their
+  /// tickets/payments, and the owner's profile are left untouched.
+  ///
+  /// Requires the following to exist in Supabase (SQL Editor / migration):
+  ///
+  ///   CREATE OR REPLACE FUNCTION public.delete_event_cascade(p_event_id uuid)
+  ///   RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+  ///   BEGIN
+  ///     DELETE FROM public.payments WHERE event_id = p_event_id;
+  ///     DELETE FROM public.tickets WHERE event_id = p_event_id;
+  ///     DELETE FROM public.event_ticket_types WHERE event_id = p_event_id;
+  ///     DELETE FROM public.gate_verifiers WHERE event_id = p_event_id;
+  ///     DELETE FROM public.events WHERE id = p_event_id;
+  ///   END; $$;
   Future<bool> deleteEvent(String eventId) async {
     try {
-      await events.delete().eq('id', eventId);
+      await client.rpc('delete_event_cascade', params: {'p_event_id': eventId});
       return true;
     } on PostgrestException catch (e) {
       debugPrint('❌ deleteEvent($eventId): ${e.message}');
@@ -332,11 +354,18 @@ class SupabaseService {
     }
   }
 
+  /// Fetches the current user's tickets, excluding any that have been
+  /// soft-deleted via [softDeleteTicket]. deleted_at is left on the row
+  /// (not hard-deleted) to preserve block_index continuity and payment
+  /// audit trail, so every read path needs this filter.
   Future<List<TicketRecord>> fetchMyTickets() async {
     final uid = currentUserId;
     if (uid == null) return [];
     try {
-      final rows = await ticketDetail.select().eq('owner_id', uid);
+      final rows = await ticketDetail
+          .select()
+          .eq('owner_id', uid)
+          .filter('deleted_at', 'is', null);
       return rows.map(TicketRecord.fromMap).toList();
     } on PostgrestException catch (e) {
       debugPrint('❌ fetchMyTickets: ${e.message}');
@@ -344,9 +373,14 @@ class SupabaseService {
     }
   }
 
+  /// Fetches all tickets for an event, excluding soft-deleted ones.
+  /// See fetchMyTickets for why the deleted_at filter is required here.
   Future<List<TicketRecord>> fetchTicketsForEvent(String eventId) async {
     try {
-      final rows = await ticketDetail.select().eq('event_id', eventId);
+      final rows = await ticketDetail
+          .select()
+          .eq('event_id', eventId)
+          .filter('deleted_at', 'is', null);
       return rows.map(TicketRecord.fromMap).toList();
     } on PostgrestException catch (e) {
       debugPrint('❌ fetchTicketsForEvent($eventId): ${e.message}');
@@ -388,6 +422,12 @@ class SupabaseService {
     }
   }
 
+  /// Soft-deletes a ticket by stamping deleted_at, instead of removing the
+  /// row. Preferred over a hard delete for tickets specifically: it keeps
+  /// block_index history intact for blockchain integrity, and preserves the
+  /// payment audit trail (payments.ticket_id still resolves). Every read
+  /// path (fetchMyTickets, fetchTicketsForEvent, etc.) must filter
+  /// deleted_at IS NULL to hide these from view.
   Future<bool> softDeleteTicket(String ticketId) async {
     try {
       await tickets.update({'deleted_at': DateTime.now().toIso8601String()}).eq(
@@ -644,6 +684,9 @@ class SupabaseService {
     }
   }
 
+  /// Removes a gate verifier assignment. Safe as a plain hard delete —
+  /// gate_verifiers is a leaf table (nothing else has a FK pointing at it),
+  /// so this never touches events, tickets, or payments.
   Future<bool> deleteGateVerifier(String id) async {
     try {
       await client.from('gate_verifiers').delete().eq('id', id);

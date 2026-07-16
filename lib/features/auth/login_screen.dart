@@ -1,17 +1,16 @@
 // lib/features/auth/login_screen.dart
 //
-// Fix notes (spinner loop):
+// Fix notes:
 //
-//   • _login() no longer calls Navigator.  The _AuthRouter in main.dart watches
+//   • _login() no longer calls Navigator. The _AuthRouter in main.dart watches
 //     authProvider and automatically swaps to the correct root scaffold the
 //     moment AuthNotifier.login() sets user to non-null.
 //
-//   • Removing the Navigator call also fixes the `if (!mounted) return` bail-
-//     out that previously prevented navigation: when _AuthRouter is the parent,
-//     LoginScreen is unmounted as soon as loading becomes true, so any
-//     Navigator call inside _login() was silently discarded.
-//
-//   • All UI is unchanged from the original.
+//   • The "Don't have an account? REGISTER" link now calls onRegisterTap
+//     instead of Navigator.pushReplacement. Pushing a new route there used
+//     to replace _AuthRouter's own route and remove it from the tree, which
+//     silently broke the post-login redirect. Swapping via callback (handled
+//     by _AuthGate in main.dart) keeps _AuthRouter mounted at all times.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,7 +19,9 @@ import 'auth_provider.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
-  const LoginScreen({super.key});
+  final VoidCallback? onRegisterTap;
+
+  const LoginScreen({super.key, this.onRegisterTap});
 
   @override
   ConsumerState<LoginScreen> createState() => _LoginScreenState();
@@ -77,6 +78,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     }
   }
 
+  void _goToRegister() {
+    if (widget.onRegisterTap != null) {
+      widget.onRegisterTap!();
+      return;
+    }
+    // Fallback for standalone use outside _AuthGate.
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const RegisterScreen()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = ref.watch(authProvider);
@@ -128,7 +141,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
               ),
               const SizedBox(height: 8),
               Text(
-                'Blockchain-secured ticketing system',
+                'Secured ticketing system',
                 style: AppTheme.sans(
                   color: AppTheme.subTextColor,
                   fontSize: 12,
@@ -244,12 +257,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                     // ── Register link ────────────────────────────────────────
                     Center(
                       child: TextButton(
-                        onPressed: () => Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const RegisterScreen(),
-                          ),
-                        ),
+                        onPressed: _goToRegister,
                         child: RichText(
                           text: TextSpan(
                             style: AppTheme.sans(
@@ -277,7 +285,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
               const SizedBox(height: 32),
               Center(
                 child: Text(
-                  'Steganography · Blockchain · Secure Tickets',
+                  'Secure Tickets',
                   style: AppTheme.sans(
                     color: Colors.white12,
                     fontSize: 10,

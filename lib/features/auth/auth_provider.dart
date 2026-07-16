@@ -1,13 +1,14 @@
 // lib/features/auth/auth_provider.dart
 //
 // Session restore is driven by Supabase's onAuthStateChange stream instead of
-// a fire-and-forget _init() call.  The stream ALWAYS emits at least one event
+// a fire-and-forget _init() call. The stream ALWAYS emits at least one event
 // on startup (session present OR null), so `loading` is guaranteed to clear.
 //
 // login() / register() still mutate state directly for immediate UI feedback
-// and to capture profile-not-found errors.  The stream listener ignores events
-// that arrive while an explicit login/register is in progress to avoid a
-// redundant double-fetch.
+// and to capture profile-not-found errors. The stream listener ignores events
+// that arrive while an explicit login/register is in progress, and is now
+// idempotent against duplicate SIGNED_IN events / token refreshes so it can
+// never clobber an already-logged-in user with a transient fetch error.
 
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -69,11 +70,15 @@ class AuthNotifier extends Notifier<AuthState> {
 
   // ── Stream-based session restore ───────────────────────────────────────────
   //
-  // onAuthStateChange emits one event as soon as the Supabase client is ready:
-  //   • session == null  →  no stored session  →  clear loading, show login
-  //   • session != null  →  restore session    →  fetch profile, update state
+  // onAuthStateChange emits an event:
+  //   • on startup (session present OR null)
+  //   • right after signInWithPassword() / signUp() succeed (duplicate of
+  //     what login()/register() already handled)
+  //   • on routine token refresh
   //
-  // This replaces the old fire-and-forget _init() which could hang silently.
+  // The listener is idempotent against all three: it skips re-fetching when
+  // the user is already loaded, and never clears a valid user over a
+  // transient error.
 
   void _subscribeToAuthChanges() {
     final sub = _supa.auth.onAuthStateChange.listen(
@@ -85,11 +90,20 @@ class AuthNotifier extends Notifier<AuthState> {
 
         if (session == null) {
           // No session: go straight to login screen.
-          state = state.copyWith(clearUser: true, loading: false, clearError: true);
+          state =
+              state.copyWith(clearUser: true, loading: false, clearError: true);
           return;
         }
 
-        // Session present: fetch the profile row.
+        // Already have this exact user loaded — duplicate SIGNED_IN event
+        // (fired right after login()'s own fetch) or a routine token
+        // refresh. Nothing to re-fetch, and nothing to risk clobbering.
+        if (state.user?.id == session.user.id) {
+          if (state.loading) state = state.copyWith(loading: false);
+          return;
+        }
+
+        // Session present for a different/new user: fetch the profile row.
         try {
           final profile = await _fetchProfile(session.user.id)
               .timeout(const Duration(seconds: 8));
@@ -103,13 +117,17 @@ class AuthNotifier extends Notifier<AuthState> {
           }
         } catch (_) {
           // Timeout, network error, RLS block, bad anon key, etc.
-          // Non-fatal — fall through to logged-out state.
-          state = state.copyWith(clearUser: true, loading: false);
+          // Only clear if we don't already have a valid user — a transient
+          // fetch error should never log out someone who's already signed in.
+          if (state.user == null) {
+            state = state.copyWith(clearUser: true, loading: false);
+          }
         }
       },
       onError: (_) {
-        // Stream-level error (e.g. bad config) — always clear the spinner.
-        if (!_explicitAuthInProgress) {
+        // Stream-level error (e.g. bad config) — clear the spinner, but
+        // don't clobber an already-logged-in user over a stream hiccup.
+        if (!_explicitAuthInProgress && state.user == null) {
           state = state.copyWith(clearUser: true, loading: false);
         }
       },
@@ -266,10 +284,18 @@ class AuthNotifier extends Notifier<AuthState> {
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
-  Future<AppUser?> _fetchProfile(String uid) async {
-    final data = await _supa.profiles.select().eq('id', uid).maybeSingle();
-    if (data == null) return null;
-    return AppUser.fromMap(data);
+  // Retries a couple of times with backoff to absorb the brief window right
+  // after sign-in/sign-up where the Postgrest client's session/JWT hasn't
+  // fully propagated yet, which can otherwise cause RLS to return zero rows.
+  Future<AppUser?> _fetchProfile(String uid, {int retries = 2}) async {
+    for (var attempt = 0; attempt <= retries; attempt++) {
+      final data = await _supa.profiles.select().eq('id', uid).maybeSingle();
+      if (data != null) return AppUser.fromMap(data);
+      if (attempt < retries) {
+        await Future.delayed(Duration(milliseconds: 300 * (attempt + 1)));
+      }
+    }
+    return null;
   }
 
   Future<void> _persistLastEmail(String email) async {

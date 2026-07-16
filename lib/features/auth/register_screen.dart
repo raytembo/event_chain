@@ -3,7 +3,7 @@
 // Registration flow — schema v2 notes:
 //
 //   • The profiles row is auto-created by the handle_new_user() Postgres
-//     trigger the moment auth.signUp() succeeds.  The trigger reads
+//     trigger the moment auth.signUp() succeeds. The trigger reads
 //     raw_user_meta_data for 'full_name' and 'role', so those MUST be
 //     passed in the signUp metadata (handled by AuthNotifier.register()).
 //
@@ -14,6 +14,15 @@
 //   • profiles.role is a Postgres enum (public.user_role).
 //     The only valid values are 'owner' and 'customer', which map exactly
 //     to the Dart UserRole enum values via UserRole.name.
+//
+//   • Navigation fix: the app bar back button, the "Already have an account?"
+//     link, and the post-registration-success redirect now call
+//     onBackToLogin instead of Navigator.pushReplacement. Pushing a new route
+//     here used to replace _AuthRouter's own route in the nav stack, removing
+//     it from the tree — after that nothing was left watching authProvider,
+//     so logging in on the resulting orphaned LoginScreen silently failed to
+//     redirect until the next hot reload/restart. Swapping via callback
+//     (handled by _AuthGate in main.dart) keeps _AuthRouter mounted always.
 
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
@@ -26,7 +35,9 @@ import 'auth_provider.dart';
 import 'login_screen.dart';
 
 class RegisterScreen extends ConsumerStatefulWidget {
-  const RegisterScreen({super.key});
+  final VoidCallback? onBackToLogin;
+
+  const RegisterScreen({super.key, this.onBackToLogin});
 
   @override
   ConsumerState<RegisterScreen> createState() => _RegisterScreenState();
@@ -58,6 +69,18 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     _phoneCtrl.dispose();
     _bioCtrl.dispose();
     super.dispose();
+  }
+
+  void _goToLogin() {
+    if (widget.onBackToLogin != null) {
+      widget.onBackToLogin!();
+      return;
+    }
+    // Fallback for standalone use outside _AuthGate.
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
   }
 
   Future<void> _pickAvatar() async {
@@ -142,10 +165,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       );
       await Future.delayed(const Duration(milliseconds: 800));
       if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-      );
+      _goToLogin();
     } else {
       final err = ref.read(authProvider).error ?? 'Registration failed';
       ScaffoldMessenger.of(context).showSnackBar(
@@ -170,10 +190,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios,
               color: AppTheme.primaryColor, size: 18),
-          onPressed: () => Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const LoginScreen()),
-          ),
+          onPressed: _goToLogin,
         ),
         title: Text(
           'CREATE ACCOUNT',
@@ -317,10 +334,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
               const SizedBox(height: 20),
               Center(
                 child: TextButton(
-                  onPressed: () => Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(builder: (_) => const LoginScreen()),
-                  ),
+                  onPressed: _goToLogin,
                   child: RichText(
                     text: TextSpan(
                       style: AppTheme.sans(
