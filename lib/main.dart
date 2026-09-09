@@ -3,6 +3,7 @@ import 'package:eventchain/features/scanner/verifier_dashboard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import 'core/ffi_bridge/eventchain_ffi.dart';
 import 'core/models/user_model.dart';
@@ -17,9 +18,11 @@ import 'features/customer/customer_root_scaffold.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  await dotenv.load(fileName: '.env');
+
   await SupabaseService.init(
-    url: 'https://oiqjukecidjjyvskgacs.supabase.co',
-    anonKey: 'sb_publishable_bxVDb-O1-ME-tkM3w05MQg_QodsVeOR',
+    url: dotenv.env['SUPABASE_URL']!,
+    anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
   );
 
   final docsDir = await getApplicationDocumentsDirectory();
