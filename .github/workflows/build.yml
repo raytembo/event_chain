@@ -14,19 +14,19 @@ jobs:
       contents: write
 
     steps:
-      # ── 1. Checkout ──────────────────────────────────────────────────────────
+
+      # ── 1. Checkout ──────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Java 21 ───────────────────────────────────────────────────────────
+      # ── 2. Java 21 ───────────────────────────────────────────────────────
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21' # Updated from '17' to '21'
+          java-version: '21'
 
-      # ── 3. Secure Flutter 3.41.9 ──────────────────────────────────────────────
-      # Updated to match local development environment and satisfy Dart SDK requirements
+      # ── 3. Flutter 3.41.9 ────────────────────────────────────────────────
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -34,61 +34,76 @@ jobs:
           channel: 'stable'
           cache: true
 
-      # ── 4. Verify exact versions ──────────────────────────────────────────────
+      # ── 4. Verify versions ───────────────────────────────────────────────
       - name: Verify Flutter & Dart versions
         run: |
           flutter --version
           dart --version
 
-      # ── 5. NDK + CMake (for libeventchain.so C++ core) ───────────────────────
+      # ── 5. Android SDK / NDK / CMake ─────────────────────────────────────
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Install NDK and CMake
-        run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
+        run: |
+          sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
 
-      # ── 6. Install dependencies ───────────────────────────────────────────────
+      # ── 6. Create .env from GitHub Secrets ───────────────────────────────
+      - name: Create .env
+        run: |
+          cat > .env <<EOF
+          SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+          EOF
+
+      # ── 7. Install dependencies ─────────────────────────────────────────
       - name: Install dependencies
         run: flutter pub get
 
-      # ── 7. Build release APK ──────────────────────────────────────────────────
+      # ── 8. Build release APK ─────────────────────────────────────────────
       - name: Build release APK
         run: flutter build apk --release
 
-      # ── 8. Rename APK ─────────────────────────────────────────────────────────
+      # ── 9. Rename APK ────────────────────────────────────────────────────
       - name: Rename APK
         run: |
           mv build/app/outputs/flutter-apk/app-release.apk \
              build/app/outputs/flutter-apk/eventchain-${GITHUB_REF_NAME}.apk
 
-      # ── 9. Create GitHub Release ─────────────────────────────────────────────
+      # ── 10. Create GitHub Release ─────────────────────────────────────────
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: EventChain ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
+
           body: |
             ## EventChain ${{ github.ref_name }}
 
             Secure event ticketing using DCT-QIM steganography, Fibonacci XOR encryption, and a private proof-of-work blockchain.
 
             ### Device Requirements
+
             - Android 6.0 (API 23) or higher
-            - ARMv8-A processor (physical device or ARM emulator)
+            - ARMv8-A processor
             - Minimum 2 GB RAM
             - Camera access for gate verification
 
             ### Installation
-            1. Download **eventchain-${{ github.ref_name }}.apk** below.
-            2. Go to **Settings → Apps → Special app access → Install unknown apps** and allow installs from your browser or file manager.
-            3. Open the downloaded APK and tap **Install**.
 
-            > x86 emulators are not supported. Requires an ARM device or ARM-based emulator.
+            1. Download **eventchain-${{ github.ref_name }}.apk**
+            2. Allow installation from your browser or file manager.
+            3. Open the downloaded APK and install.
+
+            > x86 emulators are not supported.
 
             ---
+
             Built from tag `${{ github.ref_name }}` · Flutter 3.41.9 · Dart 3.11 · Android API 23+
+
           files: build/app/outputs/flutter-apk/eventchain-${{ github.ref_name }}.apk
           draft: false
           prerelease: false
+
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

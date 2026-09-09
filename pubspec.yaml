@@ -67,6 +67,7 @@ dependencies:
   gal: ^2.3.2
   receive_sharing_intent: ^1.8.0
   http: ^1.6.0
+  flutter_dotenv: ^6.0.1
 
 
 dev_dependencies:
@@ -86,3 +87,5 @@ flutter_icons:
 
 flutter:
   uses-material-design: true
+  assets:
+    - .env
